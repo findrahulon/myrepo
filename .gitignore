@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build
+frontend/dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+
+# Docker volumes
+postgres_data/
+minio_data/
+qdrant_data/
+ollama_data/
+
+# OS
+.DS_Store
+Thumbs.db

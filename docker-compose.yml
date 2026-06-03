@@ -1,0 +1,272 @@
+version: "3.9"
+
+services:
+  # ─── Infrastructure ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ragnarok
+      POSTGRES_USER: ragnarok
+      POSTGRES_PASSWORD: ragnarok_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragnarok"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragnarok
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragnarok
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      mc mb local/ragnarok-documents --ignore-existing;
+      echo 'Bucket created';
+      "
+    networks:
+      - ragnarok
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragnarok
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/ragnarok
+      KC_DB_USERNAME: ragnarok
+      KC_DB_PASSWORD: ragnarok_secret
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin123
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200\\|UP'"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    networks:
+      - ragnarok
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ragnarok
+
+  # ─── Backend Services ──────────────────────────────────────
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      DOCUMENT_SERVICE_URL: http://document-service:8001
+      CHUNKING_SERVICE_URL: http://chunking-service:8002
+      EMBEDDING_SERVICE_URL: http://embedding-service:8003
+      RETRIEVAL_SERVICE_URL: http://retrieval-service:8004
+      LLM_SERVICE_URL: http://llm-service:8005
+      CITATION_SERVICE_URL: http://citation-service:8006
+      EXPLANATION_SERVICE_URL: http://explanation-service:8007
+      CONFIDENCE_SERVICE_URL: http://confidence-service:8008
+      FEEDBACK_SERVICE_URL: http://feedback-service:8009
+      AUDIT_SERVICE_URL: http://audit-service:8010
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ragnarok
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  document-service:
+    build: ./services/document-service
+    ports:
+      - "8001:8001"
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_BUCKET: ragnarok-documents
+      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  chunking-service:
+    build: ./services/chunking-service
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  embedding-service:
+    build: ./services/embedding-service
+    ports:
+      - "8003:8003"
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      COLLECTION_NAME: enterprise_knowledge
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  retrieval-service:
+    build: ./services/retrieval-service
+    ports:
+      - "8004:8004"
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      COLLECTION_NAME: enterprise_knowledge
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  llm-service:
+    build: ./services/llm-service
+    ports:
+      - "8005:8005"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      PRIMARY_MODEL: llama3.1:8b
+      FALLBACK_MODEL: qwen3:8b
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  citation-service:
+    build: ./services/citation-service
+    ports:
+      - "8006:8006"
+    networks:
+      - ragnarok
+
+  explanation-service:
+    build: ./services/explanation-service
+    ports:
+      - "8007:8007"
+    networks:
+      - ragnarok
+
+  confidence-service:
+    build: ./services/confidence-service
+    ports:
+      - "8008:8008"
+    networks:
+      - ragnarok
+
+  feedback-service:
+    build: ./services/feedback-service
+    ports:
+      - "8009:8009"
+    environment:
+      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  audit-service:
+    build: ./services/audit-service
+    ports:
+      - "8010:8010"
+    environment:
+      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragnarok
+
+  # ─── Frontend ──────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - ragnarok
+
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:
+  ollama_data:
+
+networks:
+  ragnarok:
+    driver: bridge
