@@ -101,12 +101,10 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+    environment:
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_NUM_GPU: 1
     networks:
       - ragnarok
 
@@ -173,8 +171,7 @@ services:
       QDRANT_PORT: 6333
       COLLECTION_NAME: enterprise_knowledge
     depends_on:
-      qdrant:
-        condition: service_healthy
+      - qdrant
     networks:
       - ragnarok
 
@@ -187,8 +184,7 @@ services:
       QDRANT_PORT: 6333
       COLLECTION_NAME: enterprise_knowledge
     depends_on:
-      qdrant:
-        condition: service_healthy
+      - qdrant
     networks:
       - ragnarok
 
@@ -198,11 +194,10 @@ services:
       - "8005:8005"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      PRIMARY_MODEL: llama3.1:8b
-      FALLBACK_MODEL: qwen3:8b
+      PRIMARY_MODEL: phi
+      FALLBACK_MODEL: orca-mini
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
     networks:
       - ragnarok
 

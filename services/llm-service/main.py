@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 app = FastAPI(title="RAGnarok LLM Service", version="1.0.0")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "llama3.1:8b")
@@ -61,11 +62,13 @@ async def health():
 async def generate(req: GenerateRequest):
     """Generate an answer using Ollama with the provided context chunks."""
     prompt = build_prompt(req.query, req.chunks)
-    model_used = PRIMARY_MODEL
-
+    
+    logger.info(f"Attempting to connect to Ollama at {OLLAMA_BASE_URL}")
+    
     async with httpx.AsyncClient(timeout=120.0) as client:
         # Try primary model first
         try:
+            logger.info(f"Trying primary model: {PRIMARY_MODEL}")
             resp = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={
@@ -76,10 +79,13 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 1024,
+                        "num_predict": 512,
+                        "num_ctx": 1024,
+                        "num_batch": 128,
                     },
                 },
             )
+            logger.info(f"Primary model response status: {resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
                 return {
@@ -88,11 +94,14 @@ async def generate(req: GenerateRequest):
                     "eval_count": data.get("eval_count", 0),
                     "eval_duration": data.get("eval_duration", 0),
                 }
+            else:
+                logger.warning(f"Primary model returned status {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            logger.warning(f"Primary model failed: {e}, trying fallback")
+            logger.error(f"Primary model failed: {type(e).__name__}: {e}", exc_info=True)
 
         # Try fallback model
         try:
+            logger.info(f"Trying fallback model: {FALLBACK_MODEL}")
             resp = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={
@@ -103,10 +112,13 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 1024,
+                        "num_predict": 512,
+                        "num_ctx": 1024,
+                        "num_batch": 128,
                     },
                 },
             )
+            logger.info(f"Fallback model response status: {resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
                 return {
@@ -115,8 +127,10 @@ async def generate(req: GenerateRequest):
                     "eval_count": data.get("eval_count", 0),
                     "eval_duration": data.get("eval_duration", 0),
                 }
+            else:
+                logger.warning(f"Fallback model returned status {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            logger.error(f"Fallback model also failed: {e}")
+            logger.error(f"Fallback model also failed: {type(e).__name__}: {e}", exc_info=True)
 
     # If both models fail, return a helpful message
     return {
