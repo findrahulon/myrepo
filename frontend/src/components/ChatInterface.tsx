@@ -12,11 +12,41 @@ import { sendQuery } from '../services/api';
 import type { ChatMessage } from '../types';
 import ChatMessageComponent from './ChatMessage';
 
-const ChatInterface: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+interface Props {
+  username: string;
+}
+
+const getStorageKey = (username: string) => `ragnarok:chat:${username}`;
+
+const loadStoredMessages = (username: string): ChatMessage[] => {
+  try {
+    const stored = localStorage.getItem(getStorageKey(username));
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored) as ChatMessage[];
+    return parsed.map((message) => ({
+      ...message,
+      timestamp: new Date(message.timestamp),
+    }));
+  } catch {
+    localStorage.removeItem(getStorageKey(username));
+    return [];
+  }
+};
+
+const ChatInterface: React.FC<Props> = ({ username }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredMessages(username));
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMessages(loadStoredMessages(username));
+  }, [username]);
+
+  useEffect(() => {
+    localStorage.setItem(getStorageKey(username), JSON.stringify(messages));
+  }, [messages, username]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
