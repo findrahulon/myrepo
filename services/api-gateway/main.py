@@ -34,6 +34,7 @@ FEEDBACK_SERVICE = os.getenv("FEEDBACK_SERVICE_URL", "http://localhost:8009")
 AUDIT_SERVICE = os.getenv("AUDIT_SERVICE_URL", "http://localhost:8010")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ragnarok")
+QUERY_TIMEOUT_SECONDS = float(os.getenv("QUERY_TIMEOUT_SECONDS", "300"))
 
 _jwks_cache: dict = {}
 
@@ -137,7 +138,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
     start = time.time()
     user = extract_user_info(token_payload)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=QUERY_TIMEOUT_SECONDS) as client:
         # 1. Retrieve relevant chunks
         retrieval_resp = await client.post(
             f"{RETRIEVAL_SERVICE}/retrieve",
@@ -150,6 +151,41 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
         )
         retrieval_data = retrieval_resp.json()
         chunks = retrieval_data.get("chunks", [])
+        if not chunks:
+            latency_ms = int((time.time() - start) * 1000)
+            return {
+                "status": "success",
+                "data": {
+                    "answer": "I could not find any relevant document context for that question. Upload or select documents that contain the answer, then try again.",
+                    "citations": [],
+                    "confidence": {
+                        "overall": 0,
+                        "level": "LOW",
+                        "breakdown": {
+                            "retrieval_relevance": 0,
+                            "context_coverage": 0,
+                            "answer_coherence": 0,
+                            "source_agreement": 0,
+                        },
+                    },
+                    "explanation": {
+                        "summary": "No matching chunks were retrieved, so no LLM answer was generated.",
+                        "reasoning_steps": [
+                            "The query was sent to the retrieval service.",
+                            "The retrieval service returned no chunks available to this user's access level.",
+                        ],
+                        "sources_analyzed": 0,
+                        "chunks_used": 0,
+                        "avg_relevance": 0,
+                        "model_used": "none",
+                    },
+                },
+                "meta": {
+                    "request_id": request_id,
+                    "latency_ms": latency_ms,
+                    "model_used": "none",
+                },
+            }
 
         # 2. Generate answer via LLM
         llm_resp = await client.post(
@@ -232,6 +268,8 @@ async def upload_document(
 ):
     """Upload a document → store in MinIO → chunk → embed."""
     user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can upload documents")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         # 1. Upload to document service

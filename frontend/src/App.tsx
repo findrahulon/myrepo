@@ -121,9 +121,11 @@ const App: React.FC = () => {
         >
           <Toolbar />
           <Box sx={{ p: 2, overflow: 'auto' }}>
-            <DocumentUpload onUploadComplete={() => setRefreshDocs((n) => n + 1)} />
+            {isAdmin && (
+              <DocumentUpload onUploadComplete={() => setRefreshDocs((n) => n + 1)} />
+            )}
 
-            <Divider sx={{ my: 2 }} />
+            {isAdmin && <Divider sx={{ my: 2 }} />}
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
               <FolderOpen fontSize="small" color="primary" />
@@ -147,7 +149,7 @@ const App: React.FC = () => {
           }}
         >
           <Toolbar />
-          <ChatInterface />
+          <ChatInterface key={username} username={username} />
         </Box>
       </Box>
     </ThemeProvider>
