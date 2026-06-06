@@ -135,3 +135,22 @@ export interface FeedbackStats {
     avg_rating: number;
   }>;
 }
+
+export interface ServiceHealth {
+  name: string;
+  role: string;
+  status: 'UP' | 'DOWN' | 'DEGRADED';
+  latency_ms: number;
+  detail: string;
+}
+
+export interface ServiceHealthReport {
+  services: ServiceHealth[];
+  summary: {
+    total: number;
+    up: number;
+    down: number;
+    degraded: number;
+    checked_at: string;
+  };
+}

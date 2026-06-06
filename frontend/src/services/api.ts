@@ -1,5 +1,5 @@
 import keycloak from './keycloak';
-import type { AuditLog, AuditStats, Escalation, FeedbackStats, QueryResponse, Document } from '../types';
+import type { AuditLog, AuditStats, Escalation, FeedbackStats, QueryResponse, Document, ServiceHealthReport } from '../types';
 
 const API_BASE = '/api/v1';
 
@@ -185,6 +185,15 @@ export async function getFeedbackStats(): Promise<FeedbackStats> {
   const response = await fetch(`${API_BASE}/feedback/stats`, { headers });
   if (!response.ok) {
     throw new Error(`Failed to load feedback stats: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getServicesHealth(): Promise<ServiceHealthReport> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/services/health`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to load service health: ${response.statusText}`);
   }
   return response.json();
 }

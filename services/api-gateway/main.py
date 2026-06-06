@@ -1,5 +1,6 @@
 """RAGnarok API Gateway — routes requests to downstream microservices."""
 
+import asyncio
 import os
 import time
 import uuid
@@ -145,6 +146,79 @@ def require_admin(token_payload: dict) -> dict:
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "api-gateway"}
+
+
+@app.get("/api/v1/services/health")
+async def services_health(token_payload: dict = Depends(validate_token)):
+    """Aggregate real-time health of every downstream service."""
+    require_admin(token_payload)
+
+    SERVICES = [
+        {"name": "api-gateway",         "url": "http://localhost:8000",       "role": "Core"},
+        {"name": "document-service",     "url": DOCUMENT_SERVICE,             "role": "Storage"},
+        {"name": "chunking-service",     "url": CHUNKING_SERVICE,             "role": "Processing"},
+        {"name": "embedding-service",    "url": EMBEDDING_SERVICE,            "role": "ML"},
+        {"name": "retrieval-service",    "url": RETRIEVAL_SERVICE,            "role": "ML"},
+        {"name": "llm-service",          "url": LLM_SERVICE,                  "role": "ML"},
+        {"name": "citation-service",     "url": CITATION_SERVICE,             "role": "Processing"},
+        {"name": "explanation-service",  "url": EXPLANATION_SERVICE,          "role": "Processing"},
+        {"name": "confidence-service",   "url": CONFIDENCE_SERVICE,           "role": "Processing"},
+        {"name": "feedback-service",     "url": FEEDBACK_SERVICE,             "role": "Data"},
+        {"name": "audit-service",        "url": AUDIT_SERVICE,                "role": "Data"},
+        {"name": "keycloak",             "url": f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/.well-known/openid-configuration", "role": "Auth"},
+    ]
+
+    async def ping(svc: dict) -> dict:
+        t0 = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                # Keycloak: full URL is already in svc["url"]; others get /health appended
+                full_url = svc["url"] if svc["name"] == "keycloak" else f"{svc['url']}/health"
+                resp = await client.get(full_url)
+            latency_ms = round((time.time() - t0) * 1000)
+            if resp.status_code == 200:
+                body = resp.json()
+                return {
+                    "name": svc["name"],
+                    "role": svc["role"],
+                    "status": "UP",
+                    "latency_ms": latency_ms,
+                    "detail": body.get("status", "ok"),
+                }
+            return {
+                "name": svc["name"],
+                "role": svc["role"],
+                "status": "DEGRADED",
+                "latency_ms": latency_ms,
+                "detail": f"HTTP {resp.status_code}",
+            }
+        except Exception as exc:
+            latency_ms = round((time.time() - t0) * 1000)
+            return {
+                "name": svc["name"],
+                "role": svc["role"],
+                "status": "DOWN",
+                "latency_ms": latency_ms,
+                "detail": str(exc)[:120],
+            }
+
+    results = await asyncio.gather(*[ping(s) for s in SERVICES])
+    results = list(results)
+
+    up    = sum(1 for r in results if r["status"] == "UP")
+    down  = sum(1 for r in results if r["status"] == "DOWN")
+    degraded = sum(1 for r in results if r["status"] == "DEGRADED")
+
+    return {
+        "services": results,
+        "summary": {
+            "total": len(results),
+            "up": up,
+            "down": down,
+            "degraded": degraded,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    }
 
 
 @app.post("/api/v1/query")
