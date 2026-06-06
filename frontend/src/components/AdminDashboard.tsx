@@ -19,6 +19,12 @@ import {
   Tabs,
   Tooltip,
   Typography,
+  Checkbox,
+  FormControl,
+  FormControlLabel,
+  InputLabel,
+  MenuItem,
+  Select,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -40,6 +46,7 @@ import {
   getFeedbackStats,
   getServicesHealth,
   resolveEscalation,
+  getServiceLogs,
 } from '../services/api';
 import type {
   AuditLog,
@@ -325,6 +332,204 @@ const ServicesTab: React.FC = () => {
   );
 };
 
+// ─── Service Logs Tab ──────────────────────────────────────────────────────
+const SERVICES_LIST = [
+  { id: 'api-gateway', name: 'API Gateway (core)' },
+  { id: 'document-service', name: 'Document Service (core)' },
+  { id: 'chunking-service', name: 'Chunking Service (core)' },
+  { id: 'embedding-service', name: 'Embedding Service (ML)' },
+  { id: 'retrieval-service', name: 'Retrieval Service (ML)' },
+  { id: 'llm-service', name: 'LLM Service (ML)' },
+  { id: 'citation-service', name: 'Citation Service (core)' },
+  { id: 'explanation-service', name: 'Explanation Service (core)' },
+  { id: 'confidence-service', name: 'Confidence Service (core)' },
+  { id: 'feedback-service', name: 'Feedback Service (core)' },
+  { id: 'audit-service', name: 'Audit Service (core)' },
+  { id: 'keycloak', name: 'Keycloak (auth)' },
+  { id: 'postgres', name: 'Postgres (db)' },
+  { id: 'minio', name: 'MinIO (storage)' },
+  { id: 'qdrant', name: 'Qdrant (vector DB)' },
+  { id: 'ollama', name: 'Ollama (LLM backend)' },
+  { id: 'frontend', name: 'Frontend (web)' }
+];
+
+const ServiceLogsTab: React.FC = () => {
+  const [selectedService, setSelectedService] = useState('api-gateway');
+  const [limit, setLimit] = useState(200);
+  const [logsText, setLogsText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const consoleRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchLogs = async (showLoader = false) => {
+    if (showLoader) setLoading(true);
+    setError(null);
+    try {
+      const data = await getServiceLogs(selectedService, limit);
+      setLogsText(data.logs);
+      if (consoleRef.current) {
+        setTimeout(() => {
+          if (consoleRef.current) {
+            consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+          }
+        }, 50);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch logs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs(true);
+  }, [selectedService, limit]);
+
+  useEffect(() => {
+    if (autoRefresh) {
+      intervalRef.current = setInterval(() => fetchLogs(false), 5000);
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    }
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [autoRefresh, selectedService, limit]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(logsText);
+  };
+
+  const renderLogLines = () => {
+    if (!logsText) return <Box sx={{ color: 'text.disabled', fontStyle: 'italic' }}>No logs found</Box>;
+
+    return logsText.split('\n').map((line, idx) => {
+      let color = '#e2e8f0';
+      let fontWeight = 'normal';
+
+      if (line.toUpperCase().includes('ERROR') || line.toUpperCase().includes('CRITICAL') || line.toUpperCase().includes('FAIL')) {
+        color = '#f87171';
+        fontWeight = 'bold';
+      } else if (line.toUpperCase().includes('WARN') || line.toUpperCase().includes('WARNING')) {
+        color = '#fbbf24';
+        fontWeight = 'bold';
+      } else if (line.toUpperCase().includes('INFO')) {
+        color = '#60a5fa';
+      } else if (line.toUpperCase().includes('DEBUG')) {
+        color = '#9ca3af';
+      }
+
+      return (
+        <div key={idx} style={{ color, fontWeight, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.4' }}>
+          {line}
+        </div>
+      );
+    });
+  };
+
+  return (
+    <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 220 }}>
+          <InputLabel id="service-select-label">Select Service</InputLabel>
+          <Select
+            labelId="service-select-label"
+            value={selectedService}
+            label="Select Service"
+            onChange={(e) => setSelectedService(e.target.value)}
+          >
+            {SERVICES_LIST.map((svc) => (
+              <MenuItem key={svc.id} value={svc.id}>
+                {svc.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel id="limit-select-label">Lines Tail</InputLabel>
+          <Select
+            labelId="limit-select-label"
+            value={limit}
+            label="Lines Tail"
+            onChange={(e) => setLimit(Number(e.target.value))}
+          >
+            <MenuItem value={50}>50 lines</MenuItem>
+            <MenuItem value={100}>100 lines</MenuItem>
+            <MenuItem value={200}>200 lines</MenuItem>
+            <MenuItem value={500}>500 lines</MenuItem>
+            <MenuItem value={1000}>1000 lines</MenuItem>
+          </Select>
+        </FormControl>
+
+        <Button
+          size="small"
+          startIcon={loading ? <CircularProgress size={12} /> : <Refresh />}
+          variant="outlined"
+          onClick={() => fetchLogs(true)}
+          disabled={loading}
+        >
+          Refresh
+        </Button>
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              color="primary"
+              size="small"
+            />
+          }
+          label={<Typography variant="body2">Auto-refresh (5s)</Typography>}
+        />
+
+        <Box sx={{ flex: 1 }} />
+
+        <Button
+          size="small"
+          variant="outlined"
+          color="secondary"
+          onClick={handleCopy}
+          disabled={!logsText}
+        >
+          Copy Logs
+        </Button>
+      </Box>
+
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      <Paper
+        ref={consoleRef}
+        elevation={3}
+        sx={{
+          flex: 1,
+          bgcolor: '#090d16',
+          p: 2,
+          overflowY: 'auto',
+          minHeight: '400px',
+          border: '1px solid #1e293b',
+          borderRadius: 2,
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        <Box sx={{ flex: 1 }}>
+          {renderLogLines()}
+        </Box>
+      </Paper>
+    </Box>
+  );
+};
+
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────
 const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
@@ -384,6 +589,7 @@ const AdminDashboard: React.FC = () => {
         <Tabs value={tab} onChange={(_, v) => setTab(v)}>
           <Tab label="Metrics" />
           <Tab label="Services" />
+          <Tab label="Service Logs" />
         </Tabs>
       </Box>
 
@@ -529,6 +735,9 @@ const AdminDashboard: React.FC = () => {
 
       {/* Services tab */}
       {tab === 1 && <Box sx={{ flex: 1, overflow: 'auto' }}><ServicesTab /></Box>}
+
+      {/* Service Logs tab */}
+      {tab === 2 && <Box sx={{ flex: 1, overflow: 'hidden' }}><ServiceLogsTab /></Box>}
     </Box>
   );
 };

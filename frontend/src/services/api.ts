@@ -305,3 +305,12 @@ export async function ingestURL(
   const data: URLIngestResponse = await response.json();
   return data.data;
 }
+
+export async function getServiceLogs(serviceName: string, limit = 100): Promise<{ service: string; logs: string }> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/services/${serviceName}/logs?limit=${limit}`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to load service logs: ${response.statusText}`);
+  }
+  return response.json();
+}

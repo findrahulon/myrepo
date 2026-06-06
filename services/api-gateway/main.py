@@ -620,3 +620,65 @@ async def download_document(document_id: str, token_payload: dict = Depends(vali
         media_type=resp.headers.get("content-type", "application/octet-stream"),
         headers=headers,
     )
+
+
+@app.get("/api/v1/services/{service_name}/logs")
+async def get_service_logs(
+    service_name: str,
+    limit: int = 100,
+    token_payload: dict = Depends(validate_token),
+):
+    """Retrieve stdout/stderr logs of a specific backend service container."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view service logs")
+
+    valid_services = [
+        "api-gateway", "document-service", "chunking-service", "embedding-service",
+        "retrieval-service", "llm-service", "citation-service", "explanation-service",
+        "confidence-service", "feedback-service", "audit-service", "keycloak",
+        "postgres", "minio", "qdrant", "ollama", "frontend"
+    ]
+    if service_name not in valid_services:
+        raise HTTPException(status_code=400, detail=f"Invalid service name: {service_name}")
+
+    container_name = f"myrepo-{service_name}-1"
+
+    try:
+        transport = httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")
+        async with httpx.AsyncClient(transport=transport) as client:
+            url = f"http://localhost/containers/{container_name}/logs?stdout=true&stderr=true&tail={limit}"
+            resp = await client.get(url, timeout=10.0)
+            
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Container {container_name} not found")
+            if resp.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Docker API error: {resp.status_code} - {resp.text}")
+
+            raw_bytes = resp.content
+            output = []
+            idx = 0
+            n = len(raw_bytes)
+            while idx + 8 <= n:
+                stream_type = raw_bytes[idx]
+                size = int.from_bytes(raw_bytes[idx+4:idx+8], byteorder="big")
+                idx += 8
+                if idx + size <= n:
+                    payload = raw_bytes[idx:idx+size]
+                    line = payload.decode("utf-8", errors="replace")
+                    output.append(line)
+                    idx += size
+                else:
+                    break
+
+            if not output and raw_bytes:
+                logs_text = raw_bytes.decode("utf-8", errors="replace")
+            else:
+                logs_text = "".join(output)
+
+            return {"service": service_name, "logs": logs_text}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query Docker socket: {str(e)}")
