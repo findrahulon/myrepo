@@ -314,3 +314,31 @@ export async function getServiceLogs(serviceName: string, limit = 100): Promise<
   }
   return response.json();
 }
+
+export async function onboardUser(
+  username: string,
+  email: string,
+  password: string,
+  role: string,
+  firstName?: string,
+  lastName?: string
+): Promise<{ status: string; message: string }> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/onboard-user`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      username,
+      email,
+      password,
+      role,
+      first_name: firstName,
+      last_name: lastName,
+    }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Onboarding failed: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}

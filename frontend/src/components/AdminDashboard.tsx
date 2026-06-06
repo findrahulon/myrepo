@@ -25,6 +25,7 @@ import {
   InputLabel,
   MenuItem,
   Select,
+  TextField,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -47,6 +48,7 @@ import {
   getServicesHealth,
   resolveEscalation,
   getServiceLogs,
+  onboardUser,
 } from '../services/api';
 import type {
   AuditLog,
@@ -530,6 +532,145 @@ const ServiceLogsTab: React.FC = () => {
 };
 
 
+// ─── Onboard User Tab ──────────────────────────────────────────────────────
+const OnboardUserTab: React.FC = () => {
+  const [username, setUsername] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState('user');
+  const [loading, setLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username.trim() || !email.trim() || !password.trim() || !firstName.trim() || !lastName.trim()) {
+      setErrorMsg('Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const resp = await onboardUser(username, email, password, role, firstName, lastName);
+      setSuccessMsg(resp.message || `User '${username}' onboarded successfully!`);
+      setUsername('');
+      setFirstName('');
+      setLastName('');
+      setEmail('');
+      setPassword('');
+      setRole('user');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to onboard user');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box sx={{ p: 3, maxWidth: 500, mx: 'auto' }}>
+      <Paper sx={{ p: 4, mt: 4 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700, mb: 3, textAlign: 'center' }}>
+          Onboard New User
+        </Typography>
+
+        <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          {successMsg && <Alert severity="success">{successMsg}</Alert>}
+          {errorMsg && <Alert severity="error">{errorMsg}</Alert>}
+
+          <TextField
+            label="Username"
+            placeholder="johndoe"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            fullWidth
+            disabled={loading}
+            size="small"
+          />
+
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <TextField
+              label="First Name"
+              placeholder="John"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              required
+              fullWidth
+              disabled={loading}
+              size="small"
+            />
+            <TextField
+              label="Last Name"
+              placeholder="Doe"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              required
+              fullWidth
+              disabled={loading}
+              size="small"
+            />
+          </Box>
+
+          <TextField
+            label="Email Address"
+            type="email"
+            placeholder="johndoe@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            fullWidth
+            disabled={loading}
+            size="small"
+          />
+
+          <TextField
+            label="Password"
+            type="password"
+            placeholder="Temporary password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            fullWidth
+            disabled={loading}
+            size="small"
+          />
+
+          <FormControl size="small" fullWidth>
+            <InputLabel id="role-select-label">Assign Role</InputLabel>
+            <Select
+              labelId="role-select-label"
+              value={role}
+              label="Assign Role"
+              onChange={(e) => setRole(e.target.value)}
+              disabled={loading}
+            >
+              <MenuItem value="user">Standard User (user)</MenuItem>
+              <MenuItem value="admin">Administrator (admin)</MenuItem>
+            </Select>
+          </FormControl>
+
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={loading}
+            fullWidth
+            sx={{ mt: 1, py: 1 }}
+          >
+            {loading ? <CircularProgress size={24} color="inherit" /> : 'Onboard User'}
+          </Button>
+        </Box>
+      </Paper>
+    </Box>
+  );
+};
+
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────
 const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
@@ -590,6 +731,7 @@ const AdminDashboard: React.FC = () => {
           <Tab label="Metrics" />
           <Tab label="Services" />
           <Tab label="Service Logs" />
+          <Tab label="Onboard User" />
         </Tabs>
       </Box>
 
@@ -738,6 +880,9 @@ const AdminDashboard: React.FC = () => {
 
       {/* Service Logs tab */}
       {tab === 2 && <Box sx={{ flex: 1, overflow: 'hidden' }}><ServiceLogsTab /></Box>}
+
+      {/* Onboard User tab */}
+      {tab === 3 && <Box sx={{ flex: 1, overflow: 'auto' }}><OnboardUserTab /></Box>}
     </Box>
   );
 };

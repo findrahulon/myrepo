@@ -141,6 +141,15 @@ class URLIngestRequest(BaseModel):
     access_level: str = "basic"
 
 
+class OnboardUserRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    role: str = "user"
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+
 def require_admin(token_payload: dict) -> dict:
     user = extract_user_info(token_payload)
     if user["access_level"] != "admin":
@@ -682,3 +691,109 @@ async def get_service_logs(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to query Docker socket: {str(e)}")
+
+
+@app.post("/api/v1/onboard-user")
+async def onboard_user(
+    req: OnboardUserRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Onboard a new user directly in Keycloak (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can onboard users")
+
+    # Connect to Keycloak Admin REST API to create the user
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # 1. Get Keycloak Admin token
+        try:
+            token_resp = await client.post(
+                f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+                data={
+                    "client_id": "admin-cli",
+                    "grant_type": "password",
+                    "username": "admin",
+                    "password": "admin123"
+                }
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to authenticate with Keycloak admin client")
+            admin_token = token_resp.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Keycloak Admin authentication error: {str(e)}")
+
+        # 2. Create User
+        first_name = req.first_name if req.first_name else req.username
+        last_name = req.last_name if req.last_name else req.username
+        user_payload = {
+            "username": req.username,
+            "email": req.email,
+            "enabled": True,
+            "emailVerified": True,
+            "firstName": first_name,
+            "lastName": last_name,
+            "credentials": [{
+                "type": "password",
+                "value": req.password,
+                "temporary": False
+            }]
+        }
+        
+        create_resp = await client.post(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=user_payload
+        )
+        
+        if create_resp.status_code == 409:
+            raise HTTPException(status_code=400, detail="Username or email already exists")
+        if create_resp.status_code != 201:
+            raise HTTPException(status_code=500, detail=f"Failed to create user in Keycloak: {create_resp.text}")
+
+        # 3. Retrieve User ID from Location header
+        location = create_resp.headers.get("Location")
+        if not location:
+            # Fallback: search for user by username
+            search_resp = await client.get(
+                f"{KEYCLOAK_URL}/admin/realms/ragnarok/users?username={req.username}",
+                headers={"Authorization": f"Bearer {admin_token}"}
+            )
+            if search_resp.status_code != 200 or not search_resp.json():
+                raise HTTPException(status_code=500, detail="User created but could not retrieve details")
+            user_id = search_resp.json()[0]["id"]
+        else:
+            user_id = location.split("/")[-1]
+
+        # 4. Get Realm Roles from Keycloak to find the target role metadata
+        roles_resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/roles",
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        if roles_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to retrieve Keycloak realm roles")
+        
+        roles = roles_resp.json()
+        target_role = next((r for r in roles if r["name"] == req.role), None)
+        if not target_role:
+            raise HTTPException(status_code=400, detail=f"Target role '{req.role}' not found in Keycloak")
+
+        # 5. Map Role to User
+        role_map_resp = await client.post(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}/role-mappings/realm",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=[target_role]
+        )
+        if role_map_resp.status_code != 204 and role_map_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to assign role to user")
+
+        # If admin is requested, we map both "admin" and "user" roles (Keycloak standard)
+        if req.role == "admin":
+            user_role = next((r for r in roles if r["name"] == "user"), None)
+            if user_role:
+                await client.post(
+                    f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}/role-mappings/realm",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    json=[user_role]
+                )
+
+    return {"status": "success", "message": f"User '{req.username}' onboarded successfully with role '{req.role}'"}
