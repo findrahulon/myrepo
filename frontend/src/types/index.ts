@@ -154,3 +154,13 @@ export interface ServiceHealthReport {
     checked_at: string;
   };
 }
+
+export interface URLIngestResponse {
+  status: string;
+  data: {
+    document_id: string;
+    filename: string;
+    chunks_created: number;
+    vectors_stored: number;
+  };
+}

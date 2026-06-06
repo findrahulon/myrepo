@@ -135,6 +135,12 @@ class ResolveEscalationRequest(BaseModel):
     resolution: Optional[str] = None
 
 
+class URLIngestRequest(BaseModel):
+    url: str
+    department: str = "general"
+    access_level: str = "basic"
+
+
 def require_admin(token_payload: dict) -> dict:
     user = extract_user_info(token_payload)
     if user["access_level"] != "admin":
@@ -413,6 +419,70 @@ async def upload_document(
     }
 
 
+@app.post("/api/v1/ingest-url")
+async def ingest_url(
+    req: URLIngestRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Ingest a webpage URL → clean text → store in MinIO → chunk → embed."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can ingest URLs")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # 1. Ingest via document service
+        doc_resp = await client.post(
+            f"{DOCUMENT_SERVICE}/url",
+            json={
+                "url": req.url,
+                "uploaded_by": user["username"],
+                "department": req.department,
+                "access_level": req.access_level,
+            },
+        )
+        if doc_resp.status_code != 200:
+            raise HTTPException(status_code=doc_resp.status_code, detail=f"URL ingestion failed: {doc_resp.text}")
+        doc_data = doc_resp.json()
+        document_id = doc_data["document_id"]
+        filename = doc_data["filename"]
+
+        # 2. Chunk the document
+        chunk_resp = await client.post(
+            f"{CHUNKING_SERVICE}/chunk",
+            json={
+                "document_id": document_id,
+                "minio_path": doc_data["minio_path"],
+                "filename": filename,
+            },
+        )
+        if chunk_resp.status_code != 200:
+            raise HTTPException(status_code=chunk_resp.status_code, detail="Chunking failed")
+        chunk_data = chunk_resp.json()
+
+        # 3. Embed the chunks
+        embed_resp = await client.post(
+            f"{EMBEDDING_SERVICE}/embed",
+            json={
+                "document_id": document_id,
+                "filename": filename,
+                "chunks": chunk_data.get("chunks", []),
+            },
+        )
+        if embed_resp.status_code != 200:
+            raise HTTPException(status_code=embed_resp.status_code, detail="Embedding failed")
+        embed_data = embed_resp.json()
+
+    return {
+        "status": "success",
+        "data": {
+            "document_id": document_id,
+            "filename": filename,
+            "chunks_created": chunk_data.get("chunk_count", 0),
+            "vectors_stored": embed_data.get("vectors_stored", 0),
+        },
+    }
+
+
 @app.post("/api/v1/feedback")
 async def submit_feedback(
     req: FeedbackRequest, token_payload: dict = Depends(validate_token)
@@ -540,6 +610,10 @@ async def download_document(document_id: str, token_payload: dict = Depends(vali
     content_disposition = resp.headers.get("content-disposition")
     if content_disposition:
         headers["Content-Disposition"] = content_disposition
+
+    source_url = resp.headers.get("x-source-url")
+    if source_url:
+        headers["X-Source-URL"] = source_url
 
     return Response(
         content=resp.content,

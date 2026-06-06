@@ -1,5 +1,5 @@
 import keycloak from './keycloak';
-import type { AuditLog, AuditStats, Escalation, FeedbackStats, QueryResponse, Document, ServiceHealthReport } from '../types';
+import type { AuditLog, AuditStats, Escalation, FeedbackStats, QueryResponse, Document, ServiceHealthReport, URLIngestResponse } from '../types';
 
 const API_BASE = '/api/v1';
 
@@ -143,6 +143,24 @@ export async function viewDocument(documentId: string): Promise<void> {
       throw new Error(`Failed to download: ${response.statusText}`);
     }
 
+    const sourceUrl = response.headers.get('X-Source-URL');
+    if (sourceUrl) {
+      if (documentWindow && !documentWindow.closed) {
+        try {
+          documentWindow.opener = null;
+        } catch (e) {}
+        documentWindow.location.href = sourceUrl;
+      } else {
+        const newWin = window.open(sourceUrl, '_blank');
+        if (newWin) {
+          try {
+            newWin.opener = null;
+          } catch (e) {}
+        }
+      }
+      return;
+    }
+
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     
@@ -263,4 +281,27 @@ export async function getServicesHealth(): Promise<ServiceHealthReport> {
     throw new Error(`Failed to load service health: ${response.statusText}`);
   }
   return response.json();
+}
+
+export async function ingestURL(
+  url: string,
+  department = 'general',
+  accessLevel = 'basic'
+): Promise<URLIngestResponse['data']> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/ingest-url`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      url,
+      department,
+      access_level: accessLevel,
+    }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ingestion failed: ${response.statusText} - ${errorText}`);
+  }
+  const data: URLIngestResponse = await response.json();
+  return data.data;
 }

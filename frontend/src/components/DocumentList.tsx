@@ -9,7 +9,7 @@ import {
   Chip,
   CircularProgress,
 } from '@mui/material';
-import { Description, PictureAsPdf, Article } from '@mui/icons-material';
+import { Description, PictureAsPdf, Article, Language } from '@mui/icons-material';
 import { listDocuments } from '../services/api';
 import type { Document } from '../types';
 
@@ -39,6 +39,7 @@ const DocumentList: React.FC<Props> = ({ refreshTrigger }) => {
   const getIcon = (type: string) => {
     if (type === 'pdf') return <PictureAsPdf color="error" />;
     if (type === 'docx' || type === 'doc') return <Article color="primary" />;
+    if (type === 'url') return <Language color="secondary" />;
     return <Description />;
   };
 
