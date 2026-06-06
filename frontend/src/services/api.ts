@@ -88,22 +88,89 @@ export async function listDocuments(): Promise<Document[]> {
 }
 
 export async function viewDocument(documentId: string): Promise<void> {
-  const documentWindow = window.open('', '_blank', 'noopener,noreferrer');
-  const headers = await getAuthHeaders();
-  const response = await fetch(`${API_BASE}/documents/${documentId}/download`, { headers });
-  if (!response.ok) {
-    documentWindow?.close();
-    throw new Error(`Failed to open document: ${response.statusText}`);
+  const documentWindow = window.open('', '_blank');
+  
+  if (documentWindow) {
+    try {
+      documentWindow.document.write(`
+        <html>
+          <head>
+            <title>Loading Document...</title>
+            <style>
+              body {
+                margin: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                background-color: #0f172a;
+                color: #e2e8f0;
+                font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+              }
+              .loader {
+                border: 3px solid #334155;
+                border-top: 3px solid #3b82f6;
+                border-radius: 50%;
+                width: 24px;
+                height: 24px;
+                animation: spin 1s linear infinite;
+                margin-bottom: 12px;
+              }
+              @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="loader"></div>
+            <div>Loading document...</div>
+          </body>
+        </html>
+      `);
+      documentWindow.document.close();
+    } catch (e) {
+      // Ignore errors if document writing is restricted
+    }
   }
 
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  if (documentWindow) {
-    documentWindow.location.href = url;
-  } else {
-    window.open(url, '_blank', 'noopener,noreferrer');
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE}/documents/${documentId}/download`, { headers });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to download: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    
+    if (documentWindow && !documentWindow.closed) {
+      try {
+        documentWindow.opener = null;
+      } catch (e) {
+        // Ignore if read-only
+      }
+      documentWindow.location.href = url;
+    } else {
+      const newWin = window.open(url, '_blank');
+      if (newWin) {
+        try {
+          newWin.opener = null;
+        } catch (e) {
+          // Ignore
+        }
+      }
+    }
+    
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    if (documentWindow && !documentWindow.closed) {
+      documentWindow.close();
+    }
+    throw err;
   }
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export async function submitFeedback(

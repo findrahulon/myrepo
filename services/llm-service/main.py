@@ -14,10 +14,6 @@ logging.basicConfig(level=logging.INFO)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "llama3.1:8b")
 FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "qwen3:8b")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "240"))
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
-OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "1024"))
-OLLAMA_NUM_BATCH = int(os.getenv("OLLAMA_NUM_BATCH", "128"))
 
 SYSTEM_PROMPT = """You are RAGnarok, an enterprise knowledge assistant. Your task is to provide
 accurate, well-structured answers based ONLY on the provided context documents.
@@ -69,7 +65,8 @@ async def generate(req: GenerateRequest):
     
     logger.info(f"Attempting to connect to Ollama at {OLLAMA_BASE_URL}")
     
-    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+    # Increased timeout to 300s (5 min) for swapping on 8GB RAM
+    async with httpx.AsyncClient(timeout=300.0) as client:
         # Try primary model first
         try:
             logger.info(f"Trying primary model: {PRIMARY_MODEL}")
@@ -83,9 +80,11 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": OLLAMA_NUM_PREDICT,
-                        "num_ctx": OLLAMA_NUM_CTX,
-                        "num_batch": OLLAMA_NUM_BATCH,
+                        "num_predict": 100,
+                        "num_ctx": 128,
+                        "num_batch": 8,
+                        "num_gpu": 0,
+                        "num_thread": 2,
                     },
                 },
             )
@@ -116,9 +115,11 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": OLLAMA_NUM_PREDICT,
-                        "num_ctx": OLLAMA_NUM_CTX,
-                        "num_batch": OLLAMA_NUM_BATCH,
+                        "num_predict": 100,
+                        "num_ctx": 128,
+                        "num_batch": 8,
+                        "num_gpu": 0,
+                        "num_thread": 2,
                     },
                 },
             )
@@ -140,7 +141,7 @@ async def generate(req: GenerateRequest):
     return {
         "answer": "I apologize, but I'm unable to generate an answer at this time. "
                   "The LLM service is temporarily unavailable. Please ensure Ollama is "
-                  "running and a model (llama3.1:8b or qwen3:8b) is pulled.",
+                  "running and a model (phi, orca-mini, llama2) is pulled.",
         "model_used": "none",
         "error": "Both primary and fallback models unavailable",
     }
