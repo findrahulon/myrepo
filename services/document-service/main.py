@@ -6,7 +6,7 @@ from datetime import datetime
 from io import BytesIO
 
 import psycopg2
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Response
 from minio import Minio
 
 app = FastAPI(title="RAGnarok Document Service", version="1.0.0")
@@ -29,6 +29,20 @@ def get_minio_client():
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
+
+
+def get_media_type(file_type: str) -> str:
+    return {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "txt": "text/plain; charset=utf-8",
+    }.get(file_type, "application/octet-stream")
+
+
+def content_disposition(filename: str) -> str:
+    safe_filename = filename.replace("\\", "_").replace('"', '\\"')
+    return f'inline; filename="{safe_filename}"'
 
 
 @app.get("/health")
@@ -123,22 +137,30 @@ async def list_documents():
         conn.close()
 
 
-@app.get("/documents/{document_id}/content")
-async def get_document_content(document_id: str):
-    """Download document content from MinIO."""
+@app.get("/documents/{document_id}/download")
+async def download_document(document_id: str):
+    """Return the original uploaded document bytes."""
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT minio_path, filename FROM documents WHERE id = %s", (document_id,))
+        cur.execute("SELECT minio_path, filename, file_type FROM documents WHERE id = %s", (document_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
-        minio_path = row[0]
+        minio_path, filename, file_type = row
     finally:
         conn.close()
 
     client = get_minio_client()
     response = client.get_object(MINIO_BUCKET, minio_path)
-    content = response.read()
-    response.close()
-    return {"content": content.decode("utf-8", errors="replace"), "minio_path": minio_path}
+    try:
+        content = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+
+    return Response(
+        content=content,
+        media_type=get_media_type(file_type),
+        headers={"Content-Disposition": content_disposition(filename)},
+    )

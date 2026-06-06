@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     confidence_level VARCHAR(20),
     latency_ms INTEGER,
     model_used VARCHAR(100),
+    escalation_status VARCHAR(20) DEFAULT 'NONE',
+    escalation_reason TEXT,
+    escalation_requested_by VARCHAR(255),
+    escalated_at TIMESTAMP WITH TIME ZONE,
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    escalation_resolution TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

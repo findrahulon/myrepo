@@ -17,6 +17,8 @@ import {
   Logout,
   AutoAwesome,
   FolderOpen,
+  Dashboard,
+  Chat,
 } from '@mui/icons-material';
 import theme from './theme/theme';
 import keycloak from './services/keycloak';
@@ -24,6 +26,7 @@ import LoginPage from './components/LoginPage';
 import ChatInterface from './components/ChatInterface';
 import DocumentUpload from './components/DocumentUpload';
 import DocumentList from './components/DocumentList';
+import AdminDashboard from './components/AdminDashboard';
 
 const DRAWER_WIDTH = 320;
 
@@ -32,6 +35,7 @@ const App: React.FC = () => {
   const [initialized, setInitialized] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [refreshDocs, setRefreshDocs] = useState(0);
+  const [view, setView] = useState<'chat' | 'admin'>('chat');
 
   useEffect(() => {
     keycloak
@@ -85,6 +89,17 @@ const App: React.FC = () => {
             <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 700 }}>
               RAGnarok
             </Typography>
+            {isAdmin && (
+              <Button
+                startIcon={view === 'admin' ? <Chat /> : <Dashboard />}
+                variant="outlined"
+                size="small"
+                onClick={() => setView(view === 'admin' ? 'chat' : 'admin')}
+                sx={{ mr: 1 }}
+              >
+                {view === 'admin' ? 'Chat' : 'Admin Dashboard'}
+              </Button>
+            )}
             <Chip
               label={isAdmin ? 'Admin' : 'User'}
               size="small"
@@ -149,7 +164,11 @@ const App: React.FC = () => {
           }}
         >
           <Toolbar />
-          <ChatInterface key={username} username={username} />
+          {view === 'admin' && isAdmin ? (
+            <AdminDashboard />
+          ) : (
+            <ChatInterface key={username} username={username} />
+          )}
         </Box>
       </Box>
     </ThemeProvider>

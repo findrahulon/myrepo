@@ -46,6 +46,7 @@ async def startup():
 
 class EmbedRequest(BaseModel):
     document_id: str
+    filename: str = ""
     chunks: list[dict]
 
 
@@ -76,6 +77,7 @@ async def embed_chunks(req: EmbedRequest):
                 vector=embedding,
                 payload={
                     "document_id": req.document_id,
+                    "filename": req.filename,
                     "chunk_text": chunk["chunk_text"],
                     "chunk_index": chunk.get("chunk_index", i),
                     "page_number": chunk.get("page_number", 1),

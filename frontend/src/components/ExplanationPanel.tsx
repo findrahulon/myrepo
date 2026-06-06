@@ -48,6 +48,9 @@ const ExplanationPanel: React.FC<Props> = ({ explanation }) => {
             <StepLabel>
               <Typography variant="caption">{step}</Typography>
             </StepLabel>
+            <StepContent>
+              {/* StepContent present so MUI renders the connector line correctly */}
+            </StepContent>
           </Step>
         ))}
       </Stepper>

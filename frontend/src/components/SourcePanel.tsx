@@ -1,22 +1,39 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
+  Alert,
   Box,
+  Button,
   Typography,
-  Paper,
   Chip,
   Accordion,
   AccordionSummary,
   AccordionDetails,
 } from '@mui/material';
-import { ExpandMore, Description, Pages } from '@mui/icons-material';
+import { ExpandMore, Description, OpenInNew, Pages } from '@mui/icons-material';
 import type { Citation } from '../types';
+import { viewDocument } from '../services/api';
 
 interface Props {
   citations: Citation[];
 }
 
 const SourcePanel: React.FC<Props> = ({ citations }) => {
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   if (!citations.length) return null;
+
+  const handleViewDocument = async (documentId: string) => {
+    setOpeningId(documentId);
+    setError(null);
+    try {
+      await viewDocument(documentId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to open document');
+    } finally {
+      setOpeningId(null);
+    }
+  };
 
   return (
     <Box>
@@ -70,9 +87,24 @@ const SourcePanel: React.FC<Props> = ({ citations }) => {
                 Section: {citation.section}
               </Typography>
             )}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<OpenInNew />}
+              onClick={() => handleViewDocument(citation.document_id)}
+              disabled={openingId === citation.document_id}
+              sx={{ mt: 1.5 }}
+            >
+              {openingId === citation.document_id ? 'Opening...' : 'View Full Document'}
+            </Button>
           </AccordionDetails>
         </Accordion>
       ))}
+      {error && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {error}
+        </Alert>
+      )}
     </Box>
   );
 };

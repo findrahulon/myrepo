@@ -6,7 +6,7 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from jose import jwt, JWTError
@@ -125,6 +125,22 @@ class FeedbackRequest(BaseModel):
     correction: Optional[str] = None
 
 
+class EscalationRequest(BaseModel):
+    query_id: str
+    reason: Optional[str] = None
+
+
+class ResolveEscalationRequest(BaseModel):
+    resolution: Optional[str] = None
+
+
+def require_admin(token_payload: dict) -> dict:
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
 # ─── Endpoints ───────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -231,6 +247,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
                 json={
                     "user_id": user["user_id"],
                     "username": user["username"],
+                    "request_id": request_id,
                     "query_text": req.query,
                     "response_text": citation_data.get("cited_answer", answer),
                     "chunks_retrieved": chunks,
@@ -305,6 +322,7 @@ async def upload_document(
             f"{EMBEDDING_SERVICE}/embed",
             json={
                 "document_id": document_id,
+                "filename": file.filename,
                 "chunks": chunk_data.get("chunks", []),
             },
         )
@@ -343,9 +361,114 @@ async def submit_feedback(
     return resp.json()
 
 
+@app.post("/api/v1/escalations")
+async def create_escalation(
+    req: EscalationRequest, token_payload: dict = Depends(validate_token)
+):
+    """Request human review for a query response."""
+    user = extract_user_info(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{AUDIT_SERVICE}/escalations",
+            json={
+                "query_id": req.query_id,
+                "reason": req.reason,
+                "requested_by": user["username"],
+            },
+        )
+    return resp.json()
+
+
+@app.get("/api/v1/escalations")
+async def list_escalations(
+    status: str = "PENDING",
+    token_payload: dict = Depends(validate_token),
+):
+    """List escalated queries for admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/escalations", params={"status": status})
+    return resp.json()
+
+
+@app.post("/api/v1/escalations/{query_id}/resolve")
+async def resolve_escalation(
+    query_id: str,
+    req: ResolveEscalationRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Resolve an escalated query."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{AUDIT_SERVICE}/escalations/{query_id}/resolve",
+            json={"resolution": req.resolution},
+        )
+    return resp.json()
+
+
+@app.get("/api/v1/logs")
+async def get_logs(limit: int = 50, token_payload: dict = Depends(validate_token)):
+    """Expose audit logs to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/logs", params={"limit": limit})
+    return resp.json()
+
+
+@app.get("/api/v1/logs/stats")
+async def get_log_stats(token_payload: dict = Depends(validate_token)):
+    """Expose RAG pipeline metrics to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/logs/stats")
+    return resp.json()
+
+
+@app.get("/api/v1/feedback")
+async def list_feedback(token_payload: dict = Depends(validate_token)):
+    """Expose raw feedback to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{FEEDBACK_SERVICE}/feedback")
+    return resp.json()
+
+
+@app.get("/api/v1/feedback/stats")
+async def feedback_stats(token_payload: dict = Depends(validate_token)):
+    """Expose feedback analytics to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{FEEDBACK_SERVICE}/feedback/stats")
+    return resp.json()
+
+
 @app.get("/api/v1/documents")
 async def list_documents(token_payload: dict = Depends(validate_token)):
     """List all uploaded documents."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(f"{DOCUMENT_SERVICE}/documents")
     return resp.json()
+
+
+@app.get("/api/v1/documents/{document_id}/download")
+async def download_document(document_id: str, token_payload: dict = Depends(validate_token)):
+    """Download or view the original source document for a citation."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(f"{DOCUMENT_SERVICE}/documents/{document_id}/download")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="Document download failed")
+
+    headers = {}
+    content_disposition = resp.headers.get("content-disposition")
+    if content_disposition:
+        headers["Content-Disposition"] = content_disposition
+
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "application/octet-stream"),
+        headers=headers,
+    )

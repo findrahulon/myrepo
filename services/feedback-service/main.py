@@ -83,3 +83,74 @@ async def list_feedback():
         }
     finally:
         conn.close()
+
+
+@app.get("/feedback/stats")
+async def feedback_stats():
+    """Summarize feedback quality signals for the admin dashboard."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COUNT(*) as total_feedback,
+                AVG(rating) as avg_rating,
+                COUNT(CASE WHEN rating >= 4 THEN 1 END) as positive,
+                COUNT(CASE WHEN rating <= 2 THEN 1 END) as negative,
+                COUNT(CASE WHEN correction IS NOT NULL AND correction <> '' THEN 1 END) as corrections
+            FROM feedback
+        """)
+        row = cur.fetchone()
+
+        cur.execute("""
+            SELECT COALESCE(query_text, 'Unknown query') as query_text,
+                   COUNT(*) as feedback_count,
+                   AVG(rating) as avg_rating,
+                   MIN(created_at) as first_seen,
+                   MAX(created_at) as last_seen
+            FROM feedback
+            GROUP BY COALESCE(query_text, 'Unknown query')
+            HAVING AVG(rating) <= 2.5 OR COUNT(*) >= 2
+            ORDER BY AVG(rating) ASC, COUNT(*) DESC
+            LIMIT 10
+        """)
+        worst_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT DATE(created_at) as day,
+                   COUNT(*) as feedback_count,
+                   AVG(rating) as avg_rating
+            FROM feedback
+            GROUP BY DATE(created_at)
+            ORDER BY day DESC
+            LIMIT 14
+        """)
+        trend_rows = cur.fetchall()
+
+        return {
+            "total_feedback": row[0],
+            "avg_rating": round(row[1], 2) if row[1] else 0,
+            "positive": row[2],
+            "negative": row[3],
+            "corrections": row[4],
+            "worst_queries": [
+                {
+                    "query_text": item[0],
+                    "feedback_count": item[1],
+                    "avg_rating": round(item[2], 2) if item[2] else 0,
+                    "first_seen": item[3].isoformat() if item[3] else None,
+                    "last_seen": item[4].isoformat() if item[4] else None,
+                }
+                for item in worst_rows
+            ],
+            "satisfaction_trend": [
+                {
+                    "date": item[0].isoformat() if item[0] else None,
+                    "feedback_count": item[1],
+                    "avg_rating": round(item[2], 2) if item[2] else 0,
+                }
+                for item in trend_rows
+            ],
+        }
+    finally:
+        conn.close()

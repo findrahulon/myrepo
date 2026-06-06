@@ -31,7 +31,7 @@ async def generate_citations(req: CiteRequest):
         citation = {
             "index": idx,
             "document_id": chunk.get("document_id", ""),
-            "doc_title": f"Document {chunk.get('document_id', 'unknown')[:8]}",
+            "doc_title": chunk.get("filename") or f"Document {chunk.get('document_id', 'unknown')[:8]}",
             "section": chunk.get("section", ""),
             "page": chunk.get("page_number", 1),
             "chunk_index": chunk.get("chunk_index", 0),

@@ -80,6 +80,7 @@ async def retrieve(req: RetrieveRequest):
                 "id": str(result.id),
                 "chunk_text": result.payload.get("chunk_text", ""),
                 "document_id": result.payload.get("document_id", ""),
+                "filename": result.payload.get("filename", ""),
                 "chunk_index": result.payload.get("chunk_index", 0),
                 "page_number": result.payload.get("page_number", 1),
                 "section": result.payload.get("section", ""),
