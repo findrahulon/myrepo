@@ -342,3 +342,51 @@ export async function onboardUser(
   }
   return response.json();
 }
+
+export interface User {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  enabled: boolean;
+  created_timestamp?: number;
+}
+
+export async function getUsers(): Promise<User[]> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/users`, { headers });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to load users: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function updateUserPassword(userId: string, password: string): Promise<{ status: string; message: string }> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/users/${userId}/password`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update password: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function deleteUser(userId: string): Promise<{ status: string; message: string }> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/users/${userId}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to delete user: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}

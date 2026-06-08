@@ -18,6 +18,16 @@
       {
         "name": "user",
         "description": "Standard user with basic access"
+      },
+      {
+        "name": "default-roles-ragnarok",
+        "description": "Default roles for ragnarok",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "user"
+          ]
+        }
       }
     ]
   },
