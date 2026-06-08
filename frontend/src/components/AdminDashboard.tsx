@@ -26,6 +26,11 @@ import {
   MenuItem,
   Select,
   TextField,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -39,6 +44,8 @@ import {
   TrendingUp,
   Warning,
   WifiOff,
+  Delete,
+  VpnKey,
 } from '@mui/icons-material';
 import {
   getAuditLogs,
@@ -49,7 +56,12 @@ import {
   resolveEscalation,
   getServiceLogs,
   onboardUser,
+  getUsers,
+  updateUserPassword,
+  deleteUser,
 } from '../services/api';
+import type { User } from '../services/api';
+import keycloak from '../services/keycloak';
 import type {
   AuditLog,
   AuditStats,
@@ -671,6 +683,242 @@ const OnboardUserTab: React.FC = () => {
 };
 
 
+// ─── Manage Users Tab ──────────────────────────────────────────────────────
+const ManageUsersTab: React.FC = () => {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [changePasswordUser, setChangePasswordUser] = useState<User | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
+  
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const loadUsers = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await getUsers();
+      setUsers(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch users');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const handlePasswordChangeSubmit = async () => {
+    if (!changePasswordUser || !newPassword.trim()) return;
+    setActionLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      await updateUserPassword(changePasswordUser.id, newPassword);
+      setSuccessMsg(`Password for user '${changePasswordUser.username}' updated successfully.`);
+      setChangePasswordUser(null);
+      setNewPassword('');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to update password');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteConfirmSubmit = async () => {
+    if (!deleteConfirmUser) return;
+    setActionLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      await deleteUser(deleteConfirmUser.id);
+      setSuccessMsg(`User '${deleteConfirmUser.username}' deleted successfully.`);
+      setDeleteConfirmUser(null);
+      loadUsers();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to delete user');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const currentUserId = keycloak.subject;
+
+  return (
+    <Box sx={{ p: 3 }}>
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            User Management
+          </Typography>
+          <Button
+            variant="outlined"
+            onClick={loadUsers}
+            startIcon={<Refresh />}
+            disabled={loading}
+          >
+            Refresh List
+          </Button>
+        </Box>
+
+        {successMsg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMsg(null)}>{successMsg}</Alert>}
+        {errorMsg && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMsg(null)}>{errorMsg}</Alert>}
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : (
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 'bold' }}>Username</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Full Name</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Email</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Role</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Date Created</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }} align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {users.map((u) => {
+                const isSelf = u.id === currentUserId;
+                const isRootAdmin = u.username === 'admin';
+                const dateStr = u.created_timestamp 
+                  ? new Date(u.created_timestamp).toLocaleDateString() + ' ' + new Date(u.created_timestamp).toLocaleTimeString()
+                  : 'N/A';
+                
+                return (
+                  <TableRow key={u.id} hover>
+                    <TableCell>{u.username}</TableCell>
+                    <TableCell>{`${u.first_name} ${u.last_name}`.trim() || 'N/A'}</TableCell>
+                    <TableCell>{u.email || 'N/A'}</TableCell>
+                    <TableCell>
+                      <Chip 
+                        label={u.role.toUpperCase()} 
+                        color={u.role === 'admin' ? 'secondary' : 'default'}
+                        size="small"
+                      />
+                    </TableCell>
+                    <TableCell>{dateStr}</TableCell>
+                    <TableCell align="right">
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+                        <Tooltip title="Change Password">
+                          <IconButton 
+                            color="primary" 
+                            size="small"
+                            onClick={() => setChangePasswordUser(u)}
+                          >
+                            <VpnKey />
+                          </IconButton>
+                        </Tooltip>
+                        
+                        <Tooltip title={isSelf ? "Cannot delete yourself" : isRootAdmin ? "Cannot delete default admin" : "Delete User"}>
+                          <span>
+                            <IconButton 
+                              color="error" 
+                              size="small"
+                              disabled={isSelf || isRootAdmin}
+                              onClick={() => setDeleteConfirmUser(u)}
+                            >
+                              <Delete />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Paper>
+
+      {/* Change Password Dialog */}
+      <Dialog 
+        open={Boolean(changePasswordUser)} 
+        onClose={() => !actionLoading && setChangePasswordUser(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle sx={{ fontWeight: 'bold' }}>Change Password</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Enter a new password for user <strong>{changePasswordUser?.username}</strong>.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="New Password"
+            type="password"
+            fullWidth
+            variant="outlined"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            disabled={actionLoading}
+            size="small"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setChangePasswordUser(null)} disabled={actionLoading}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handlePasswordChangeSubmit} 
+            color="primary" 
+            variant="contained"
+            disabled={actionLoading || !newPassword.trim()}
+          >
+            {actionLoading ? <CircularProgress size={20} /> : 'Save Password'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete User Confirmation Dialog */}
+      <Dialog 
+        open={Boolean(deleteConfirmUser)} 
+        onClose={() => !actionLoading && setDeleteConfirmUser(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Warning color="warning" /> Confirm Deletion
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you absolutely sure you want to delete user <strong>{deleteConfirmUser?.username}</strong>?
+            <br /><br />
+            This action is permanent and cannot be undone. All access for this user will be revoked immediately.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteConfirmUser(null)} disabled={actionLoading}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleDeleteConfirmSubmit} 
+            color="error" 
+            variant="contained"
+            disabled={actionLoading}
+          >
+            {actionLoading ? <CircularProgress size={20} /> : 'Delete User'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+};
+
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────
 const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
@@ -732,6 +980,7 @@ const AdminDashboard: React.FC = () => {
           <Tab label="Services" />
           <Tab label="Service Logs" />
           <Tab label="Onboard User" />
+          <Tab label="Manage Users" />
         </Tabs>
       </Box>
 
@@ -883,6 +1132,9 @@ const AdminDashboard: React.FC = () => {
 
       {/* Onboard User tab */}
       {tab === 3 && <Box sx={{ flex: 1, overflow: 'auto' }}><OnboardUserTab /></Box>}
+
+      {/* Manage Users tab */}
+      {tab === 4 && <Box sx={{ flex: 1, overflow: 'auto' }}><ManageUsersTab /></Box>}
     </Box>
   );
 };

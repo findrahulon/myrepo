@@ -150,6 +150,10 @@ class OnboardUserRequest(BaseModel):
     last_name: Optional[str] = None
 
 
+class UpdatePasswordRequest(BaseModel):
+    password: str
+
+
 def require_admin(token_payload: dict) -> dict:
     user = extract_user_info(token_payload)
     if user["access_level"] != "admin":
@@ -797,3 +801,179 @@ async def onboard_user(
                 )
 
     return {"status": "success", "message": f"User '{req.username}' onboarded successfully with role '{req.role}'"}
+
+
+@app.get("/api/v1/users")
+async def list_users(
+    token_payload: dict = Depends(validate_token),
+):
+    """Retrieve all users in the realm with roles (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can list users")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Get admin token
+        try:
+            token_resp = await client.post(
+                f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+                data={
+                    "client_id": "admin-cli",
+                    "grant_type": "password",
+                    "username": "admin",
+                    "password": "admin123"
+                }
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to authenticate with Keycloak admin client")
+            admin_token = token_resp.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Keycloak Admin authentication error: {str(e)}")
+
+        # Fetch all users
+        users_resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users",
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        if users_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to retrieve users from Keycloak")
+
+        users = users_resp.json()
+
+        async def fetch_user_roles(u):
+            try:
+                roles_resp = await client.get(
+                    f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{u['id']}/role-mappings/realm/composite",
+                    headers={"Authorization": f"Bearer {admin_token}"}
+                )
+                if roles_resp.status_code == 200:
+                    role_names = [r["name"] for r in roles_resp.json()]
+                    if "admin" in role_names:
+                        u["role"] = "admin"
+                    elif "user" in role_names:
+                        u["role"] = "user"
+                    else:
+                        u["role"] = "none"
+                else:
+                    u["role"] = "unknown"
+            except Exception:
+                u["role"] = "unknown"
+
+        await asyncio.gather(*(fetch_user_roles(u) for u in users))
+
+        # Return formatted users list
+        formatted_users = []
+        for u in users:
+            formatted_users.append({
+                "id": u.get("id"),
+                "username": u.get("username"),
+                "email": u.get("email", ""),
+                "first_name": u.get("firstName", ""),
+                "last_name": u.get("lastName", ""),
+                "role": u.get("role", "user"),
+                "enabled": u.get("enabled", True),
+                "created_timestamp": u.get("createdTimestamp")
+            })
+
+        return formatted_users
+
+
+@app.put("/api/v1/users/{user_id}/password")
+async def update_user_password(
+    user_id: str,
+    req: UpdatePasswordRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Update password for a user (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can update passwords")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Get admin token
+        try:
+            token_resp = await client.post(
+                f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+                data={
+                    "client_id": "admin-cli",
+                    "grant_type": "password",
+                    "username": "admin",
+                    "password": "admin123"
+                }
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to authenticate with Keycloak admin client")
+            admin_token = token_resp.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Keycloak Admin authentication error: {str(e)}")
+
+        # Reset user password in Keycloak
+        reset_payload = {
+            "type": "password",
+            "value": req.password,
+            "temporary": False
+        }
+        reset_resp = await client.put(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=reset_payload
+        )
+        if reset_resp.status_code != 204:
+            raise HTTPException(status_code=500, detail=f"Failed to reset password in Keycloak: {reset_resp.text}")
+
+    return {"status": "success", "message": "User password updated successfully"}
+
+
+@app.delete("/api/v1/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    token_payload: dict = Depends(validate_token),
+):
+    """Delete a user from the realm (Admin only)."""
+    current_user = extract_user_info(token_payload)
+    if current_user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete users")
+
+    # Safety Check: Prevent self-deletion
+    if current_user["user_id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Get admin token
+        try:
+            token_resp = await client.post(
+                f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+                data={
+                    "client_id": "admin-cli",
+                    "grant_type": "password",
+                    "username": "admin",
+                    "password": "admin123"
+                }
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to authenticate with Keycloak admin client")
+            admin_token = token_resp.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Keycloak Admin authentication error: {str(e)}")
+
+        # Fetch user details first to check username
+        user_resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}",
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        if user_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="User not found in Keycloak")
+
+        user_data = user_resp.json()
+        if user_data.get("username") == "admin":
+            raise HTTPException(status_code=400, detail="Cannot delete default admin account")
+
+        # Delete user
+        delete_resp = await client.delete(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}",
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        if delete_resp.status_code != 204:
+            raise HTTPException(status_code=500, detail=f"Failed to delete user in Keycloak: {delete_resp.text}")
+
+    return {"status": "success", "message": "User deleted successfully"}
