@@ -1,19 +1,22 @@
 import React, { useState } from 'react';
 import {
+  Alert,
   Box,
+  Button,
   Typography,
   Paper,
   Tabs,
   Tab,
   Divider,
 } from '@mui/material';
-import { Person, SmartToy } from '@mui/icons-material';
+import { Person, SmartToy, SupportAgent } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage as ChatMessageType } from '../types';
 import ConfidenceIndicator from './ConfidenceIndicator';
 import SourcePanel from './SourcePanel';
 import ExplanationPanel from './ExplanationPanel';
 import FeedbackWidget from './FeedbackWidget';
+import { requestEscalation } from '../services/api';
 
 interface Props {
   message: ChatMessageType;
@@ -21,7 +24,29 @@ interface Props {
 
 const ChatMessageComponent: React.FC<Props> = ({ message }) => {
   const [activeTab, setActiveTab] = useState(0);
+  const [escalating, setEscalating] = useState(false);
+  const [escalated, setEscalated] = useState(false);
+  const [escalationError, setEscalationError] = useState<string | null>(null);
   const isUser = message.role === 'user';
+  const isLowConfidence = message.confidence?.level === 'LOW';
+
+  const handleEscalate = async () => {
+    if (!message.meta?.request_id) return;
+
+    setEscalating(true);
+    setEscalationError(null);
+    try {
+      await requestEscalation(
+        message.meta.request_id,
+        'User requested human review for a low-confidence answer',
+      );
+      setEscalated(true);
+    } catch (err) {
+      setEscalationError(err instanceof Error ? err.message : 'Failed to request review');
+    } finally {
+      setEscalating(false);
+    }
+  };
 
   return (
     <Box
@@ -65,6 +90,32 @@ const ChatMessageComponent: React.FC<Props> = ({ message }) => {
 
             {message.confidence && (
               <ConfidenceIndicator confidence={message.confidence} />
+            )}
+
+            {isLowConfidence && (
+              <Alert
+                severity="warning"
+                sx={{ mb: 1.5 }}
+                action={
+                  <Button
+                    color="inherit"
+                    size="small"
+                    startIcon={<SupportAgent />}
+                    onClick={handleEscalate}
+                    disabled={escalating || escalated || !message.meta?.request_id}
+                  >
+                    {escalated ? 'Review Requested' : escalating ? 'Requesting...' : 'Request Human Review'}
+                  </Button>
+                }
+              >
+                Low confidence answer. Verify this with a human expert before using it for decisions.
+              </Alert>
+            )}
+
+            {escalationError && (
+              <Alert severity="error" sx={{ mb: 1.5 }}>
+                {escalationError}
+              </Alert>
             )}
 
             <Tabs

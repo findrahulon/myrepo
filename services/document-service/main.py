@@ -5,8 +5,12 @@ import uuid
 from datetime import datetime
 from io import BytesIO
 
+import json
 import psycopg2
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+import httpx
+from bs4 import BeautifulSoup
+from pydantic import BaseModel
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Response
 from minio import Minio
 
 app = FastAPI(title="RAGnarok Document Service", version="1.0.0")
@@ -31,9 +35,116 @@ def get_db():
     return psycopg2.connect(DATABASE_URL)
 
 
+def get_media_type(file_type: str) -> str:
+    return {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "txt": "text/plain; charset=utf-8",
+        "url": "text/plain; charset=utf-8",
+    }.get(file_type, "application/octet-stream")
+
+
+def content_disposition(filename: str) -> str:
+    safe_filename = filename.replace("\\", "_").replace('"', '\\"')
+    return f'inline; filename="{safe_filename}"'
+
+
+class URLIngestInput(BaseModel):
+    url: str
+    uploaded_by: str = "anonymous"
+    department: str = "general"
+    access_level: str = "basic"
+
+
+def clean_html(html_content: str) -> tuple[str, str]:
+    soup = BeautifulSoup(html_content, "html.parser")
+    title = "Webpage"
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+    
+    # Remove script and style elements
+    for element in soup(["script", "style", "nav", "footer", "header", "noscript", "iframe"]):
+        element.decompose()
+        
+    text = soup.get_text(separator="\n")
+    lines = (line.strip() for line in text.splitlines())
+    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+    text_content = "\n".join(chunk for chunk in chunks if chunk)
+    return title, text_content
+
+
+def sanitize_filename(name: str) -> str:
+    sanitized = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+    sanitized = sanitized.replace(" ", "_")[:100]
+    return sanitized or "webpage"
+
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "document-service"}
+
+
+@app.post("/url")
+async def ingest_url(req: URLIngestInput):
+    """Fetch URL content, clean it, upload to MinIO, and store metadata in PostgreSQL."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            resp = await client.get(req.url, headers=headers)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Failed to fetch URL: HTTP {resp.status_code}")
+            html = resp.text
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching URL: {str(e)}")
+
+    title, text_content = clean_html(html)
+    safe_title = sanitize_filename(title)
+    filename = f"{safe_title}.txt"
+    content_bytes = text_content.encode("utf-8")
+    file_size = len(content_bytes)
+
+    doc_id = str(uuid.uuid4())
+    minio_path = f"documents/{doc_id}/{filename}"
+
+    # Upload to MinIO
+    client = get_minio_client()
+    if not client.bucket_exists(MINIO_BUCKET):
+        client.make_bucket(MINIO_BUCKET)
+
+    client.put_object(
+        MINIO_BUCKET,
+        minio_path,
+        BytesIO(content_bytes),
+        length=file_size,
+        content_type="text/plain; charset=utf-8",
+    )
+
+    # Store metadata in PostgreSQL
+    metadata_json = json.dumps({"source_url": req.url})
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO documents (id, filename, file_type, file_size, minio_path,
+               uploaded_by, department, access_level, status, metadata)
+               VALUES (%s, %s, 'url', %s, %s, %s, %s, %s, 'uploaded', %s)""",
+            (doc_id, filename, file_size, minio_path,
+             req.uploaded_by, req.department, req.access_level, metadata_json),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "document_id": doc_id,
+        "filename": filename,
+        "file_size": file_size,
+        "minio_path": minio_path,
+        "status": "uploaded",
+    }
 
 
 @app.post("/upload")
@@ -123,22 +234,40 @@ async def list_documents():
         conn.close()
 
 
-@app.get("/documents/{document_id}/content")
-async def get_document_content(document_id: str):
-    """Download document content from MinIO."""
+@app.get("/documents/{document_id}/download")
+async def download_document(document_id: str):
+    """Return the original uploaded document bytes."""
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT minio_path, filename FROM documents WHERE id = %s", (document_id,))
+        cur.execute("SELECT minio_path, filename, file_type, metadata FROM documents WHERE id = %s", (document_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
-        minio_path = row[0]
+        minio_path, filename, file_type, metadata = row
     finally:
         conn.close()
 
     client = get_minio_client()
     response = client.get_object(MINIO_BUCKET, minio_path)
-    content = response.read()
-    response.close()
-    return {"content": content.decode("utf-8", errors="replace"), "minio_path": minio_path}
+    try:
+        content = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+
+    headers = {"Content-Disposition": content_disposition(filename)}
+    if metadata:
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except:
+                metadata = {}
+        if isinstance(metadata, dict) and "source_url" in metadata:
+            headers["X-Source-URL"] = metadata["source_url"]
+
+    return Response(
+        content=content,
+        media_type=get_media_type(file_type),
+        headers=headers,
+    )

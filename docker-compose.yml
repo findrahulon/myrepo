@@ -130,6 +130,8 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - ragnarok
 
@@ -196,9 +198,7 @@ services:
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       PRIMARY_MODEL: phi
-      FALLBACK_MODEL: orca-mini
-      OLLAMA_TIMEOUT_SECONDS: 240
-      OLLAMA_NUM_PREDICT: 256
+      FALLBACK_MODEL: phi
     depends_on:
       - ollama
     networks:

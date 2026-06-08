@@ -1,12 +1,13 @@
 """RAGnarok API Gateway — routes requests to downstream microservices."""
 
+import asyncio
 import os
 import time
 import uuid
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from jose import jwt, JWTError
@@ -125,10 +126,114 @@ class FeedbackRequest(BaseModel):
     correction: Optional[str] = None
 
 
+class EscalationRequest(BaseModel):
+    query_id: str
+    reason: Optional[str] = None
+
+
+class ResolveEscalationRequest(BaseModel):
+    resolution: Optional[str] = None
+
+
+class URLIngestRequest(BaseModel):
+    url: str
+    department: str = "general"
+    access_level: str = "basic"
+
+
+class OnboardUserRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    role: str = "user"
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+
+def require_admin(token_payload: dict) -> dict:
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
 # ─── Endpoints ───────────────────────────────────────────────
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "api-gateway"}
+
+
+@app.get("/api/v1/services/health")
+async def services_health(token_payload: dict = Depends(validate_token)):
+    """Aggregate real-time health of every downstream service."""
+    require_admin(token_payload)
+
+    SERVICES = [
+        {"name": "api-gateway",         "url": "http://localhost:8000",       "role": "Core"},
+        {"name": "document-service",     "url": DOCUMENT_SERVICE,             "role": "Storage"},
+        {"name": "chunking-service",     "url": CHUNKING_SERVICE,             "role": "Processing"},
+        {"name": "embedding-service",    "url": EMBEDDING_SERVICE,            "role": "ML"},
+        {"name": "retrieval-service",    "url": RETRIEVAL_SERVICE,            "role": "ML"},
+        {"name": "llm-service",          "url": LLM_SERVICE,                  "role": "ML"},
+        {"name": "citation-service",     "url": CITATION_SERVICE,             "role": "Processing"},
+        {"name": "explanation-service",  "url": EXPLANATION_SERVICE,          "role": "Processing"},
+        {"name": "confidence-service",   "url": CONFIDENCE_SERVICE,           "role": "Processing"},
+        {"name": "feedback-service",     "url": FEEDBACK_SERVICE,             "role": "Data"},
+        {"name": "audit-service",        "url": AUDIT_SERVICE,                "role": "Data"},
+        {"name": "keycloak",             "url": f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/.well-known/openid-configuration", "role": "Auth"},
+    ]
+
+    async def ping(svc: dict) -> dict:
+        t0 = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                # Keycloak: full URL is already in svc["url"]; others get /health appended
+                full_url = svc["url"] if svc["name"] == "keycloak" else f"{svc['url']}/health"
+                resp = await client.get(full_url)
+            latency_ms = round((time.time() - t0) * 1000)
+            if resp.status_code == 200:
+                body = resp.json()
+                return {
+                    "name": svc["name"],
+                    "role": svc["role"],
+                    "status": "UP",
+                    "latency_ms": latency_ms,
+                    "detail": body.get("status", "ok"),
+                }
+            return {
+                "name": svc["name"],
+                "role": svc["role"],
+                "status": "DEGRADED",
+                "latency_ms": latency_ms,
+                "detail": f"HTTP {resp.status_code}",
+            }
+        except Exception as exc:
+            latency_ms = round((time.time() - t0) * 1000)
+            return {
+                "name": svc["name"],
+                "role": svc["role"],
+                "status": "DOWN",
+                "latency_ms": latency_ms,
+                "detail": str(exc)[:120],
+            }
+
+    results = await asyncio.gather(*[ping(s) for s in SERVICES])
+    results = list(results)
+
+    up    = sum(1 for r in results if r["status"] == "UP")
+    down  = sum(1 for r in results if r["status"] == "DOWN")
+    degraded = sum(1 for r in results if r["status"] == "DEGRADED")
+
+    return {
+        "services": results,
+        "summary": {
+            "total": len(results),
+            "up": up,
+            "down": down,
+            "degraded": degraded,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    }
 
 
 @app.post("/api/v1/query")
@@ -231,6 +336,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
                 json={
                     "user_id": user["user_id"],
                     "username": user["username"],
+                    "request_id": request_id,
                     "query_text": req.query,
                     "response_text": citation_data.get("cited_answer", answer),
                     "chunks_retrieved": chunks,
@@ -305,6 +411,7 @@ async def upload_document(
             f"{EMBEDDING_SERVICE}/embed",
             json={
                 "document_id": document_id,
+                "filename": file.filename,
                 "chunks": chunk_data.get("chunks", []),
             },
         )
@@ -315,6 +422,70 @@ async def upload_document(
         "data": {
             "document_id": document_id,
             "filename": file.filename,
+            "chunks_created": chunk_data.get("chunk_count", 0),
+            "vectors_stored": embed_data.get("vectors_stored", 0),
+        },
+    }
+
+
+@app.post("/api/v1/ingest-url")
+async def ingest_url(
+    req: URLIngestRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Ingest a webpage URL → clean text → store in MinIO → chunk → embed."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can ingest URLs")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # 1. Ingest via document service
+        doc_resp = await client.post(
+            f"{DOCUMENT_SERVICE}/url",
+            json={
+                "url": req.url,
+                "uploaded_by": user["username"],
+                "department": req.department,
+                "access_level": req.access_level,
+            },
+        )
+        if doc_resp.status_code != 200:
+            raise HTTPException(status_code=doc_resp.status_code, detail=f"URL ingestion failed: {doc_resp.text}")
+        doc_data = doc_resp.json()
+        document_id = doc_data["document_id"]
+        filename = doc_data["filename"]
+
+        # 2. Chunk the document
+        chunk_resp = await client.post(
+            f"{CHUNKING_SERVICE}/chunk",
+            json={
+                "document_id": document_id,
+                "minio_path": doc_data["minio_path"],
+                "filename": filename,
+            },
+        )
+        if chunk_resp.status_code != 200:
+            raise HTTPException(status_code=chunk_resp.status_code, detail="Chunking failed")
+        chunk_data = chunk_resp.json()
+
+        # 3. Embed the chunks
+        embed_resp = await client.post(
+            f"{EMBEDDING_SERVICE}/embed",
+            json={
+                "document_id": document_id,
+                "filename": filename,
+                "chunks": chunk_data.get("chunks", []),
+            },
+        )
+        if embed_resp.status_code != 200:
+            raise HTTPException(status_code=embed_resp.status_code, detail="Embedding failed")
+        embed_data = embed_resp.json()
+
+    return {
+        "status": "success",
+        "data": {
+            "document_id": document_id,
+            "filename": filename,
             "chunks_created": chunk_data.get("chunk_count", 0),
             "vectors_stored": embed_data.get("vectors_stored", 0),
         },
@@ -343,9 +514,286 @@ async def submit_feedback(
     return resp.json()
 
 
+@app.post("/api/v1/escalations")
+async def create_escalation(
+    req: EscalationRequest, token_payload: dict = Depends(validate_token)
+):
+    """Request human review for a query response."""
+    user = extract_user_info(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{AUDIT_SERVICE}/escalations",
+            json={
+                "query_id": req.query_id,
+                "reason": req.reason,
+                "requested_by": user["username"],
+            },
+        )
+    return resp.json()
+
+
+@app.get("/api/v1/escalations")
+async def list_escalations(
+    status: str = "PENDING",
+    token_payload: dict = Depends(validate_token),
+):
+    """List escalated queries for admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/escalations", params={"status": status})
+    return resp.json()
+
+
+@app.post("/api/v1/escalations/{query_id}/resolve")
+async def resolve_escalation(
+    query_id: str,
+    req: ResolveEscalationRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Resolve an escalated query."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{AUDIT_SERVICE}/escalations/{query_id}/resolve",
+            json={"resolution": req.resolution},
+        )
+    return resp.json()
+
+
+@app.get("/api/v1/logs")
+async def get_logs(limit: int = 50, token_payload: dict = Depends(validate_token)):
+    """Expose audit logs to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/logs", params={"limit": limit})
+    return resp.json()
+
+
+@app.get("/api/v1/logs/stats")
+async def get_log_stats(token_payload: dict = Depends(validate_token)):
+    """Expose RAG pipeline metrics to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{AUDIT_SERVICE}/logs/stats")
+    return resp.json()
+
+
+@app.get("/api/v1/feedback")
+async def list_feedback(token_payload: dict = Depends(validate_token)):
+    """Expose raw feedback to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{FEEDBACK_SERVICE}/feedback")
+    return resp.json()
+
+
+@app.get("/api/v1/feedback/stats")
+async def feedback_stats(token_payload: dict = Depends(validate_token)):
+    """Expose feedback analytics to admins."""
+    require_admin(token_payload)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"{FEEDBACK_SERVICE}/feedback/stats")
+    return resp.json()
+
+
 @app.get("/api/v1/documents")
 async def list_documents(token_payload: dict = Depends(validate_token)):
     """List all uploaded documents."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(f"{DOCUMENT_SERVICE}/documents")
     return resp.json()
+
+
+@app.get("/api/v1/documents/{document_id}/download")
+async def download_document(document_id: str, token_payload: dict = Depends(validate_token)):
+    """Download or view the original source document for a citation."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(f"{DOCUMENT_SERVICE}/documents/{document_id}/download")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="Document download failed")
+
+    headers = {}
+    content_disposition = resp.headers.get("content-disposition")
+    if content_disposition:
+        headers["Content-Disposition"] = content_disposition
+
+    source_url = resp.headers.get("x-source-url")
+    if source_url:
+        headers["X-Source-URL"] = source_url
+
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "application/octet-stream"),
+        headers=headers,
+    )
+
+
+@app.get("/api/v1/services/{service_name}/logs")
+async def get_service_logs(
+    service_name: str,
+    limit: int = 100,
+    token_payload: dict = Depends(validate_token),
+):
+    """Retrieve stdout/stderr logs of a specific backend service container."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view service logs")
+
+    valid_services = [
+        "api-gateway", "document-service", "chunking-service", "embedding-service",
+        "retrieval-service", "llm-service", "citation-service", "explanation-service",
+        "confidence-service", "feedback-service", "audit-service", "keycloak",
+        "postgres", "minio", "qdrant", "ollama", "frontend"
+    ]
+    if service_name not in valid_services:
+        raise HTTPException(status_code=400, detail=f"Invalid service name: {service_name}")
+
+    container_name = f"myrepo-{service_name}-1"
+
+    try:
+        transport = httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")
+        async with httpx.AsyncClient(transport=transport) as client:
+            url = f"http://localhost/containers/{container_name}/logs?stdout=true&stderr=true&tail={limit}"
+            resp = await client.get(url, timeout=10.0)
+            
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Container {container_name} not found")
+            if resp.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Docker API error: {resp.status_code} - {resp.text}")
+
+            raw_bytes = resp.content
+            output = []
+            idx = 0
+            n = len(raw_bytes)
+            while idx + 8 <= n:
+                stream_type = raw_bytes[idx]
+                size = int.from_bytes(raw_bytes[idx+4:idx+8], byteorder="big")
+                idx += 8
+                if idx + size <= n:
+                    payload = raw_bytes[idx:idx+size]
+                    line = payload.decode("utf-8", errors="replace")
+                    output.append(line)
+                    idx += size
+                else:
+                    break
+
+            if not output and raw_bytes:
+                logs_text = raw_bytes.decode("utf-8", errors="replace")
+            else:
+                logs_text = "".join(output)
+
+            return {"service": service_name, "logs": logs_text}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query Docker socket: {str(e)}")
+
+
+@app.post("/api/v1/onboard-user")
+async def onboard_user(
+    req: OnboardUserRequest,
+    token_payload: dict = Depends(validate_token),
+):
+    """Onboard a new user directly in Keycloak (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can onboard users")
+
+    # Connect to Keycloak Admin REST API to create the user
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # 1. Get Keycloak Admin token
+        try:
+            token_resp = await client.post(
+                f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+                data={
+                    "client_id": "admin-cli",
+                    "grant_type": "password",
+                    "username": "admin",
+                    "password": "admin123"
+                }
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to authenticate with Keycloak admin client")
+            admin_token = token_resp.json()["access_token"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Keycloak Admin authentication error: {str(e)}")
+
+        # 2. Create User
+        first_name = req.first_name if req.first_name else req.username
+        last_name = req.last_name if req.last_name else req.username
+        user_payload = {
+            "username": req.username,
+            "email": req.email,
+            "enabled": True,
+            "emailVerified": True,
+            "firstName": first_name,
+            "lastName": last_name,
+            "credentials": [{
+                "type": "password",
+                "value": req.password,
+                "temporary": False
+            }]
+        }
+        
+        create_resp = await client.post(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=user_payload
+        )
+        
+        if create_resp.status_code == 409:
+            raise HTTPException(status_code=400, detail="Username or email already exists")
+        if create_resp.status_code != 201:
+            raise HTTPException(status_code=500, detail=f"Failed to create user in Keycloak: {create_resp.text}")
+
+        # 3. Retrieve User ID from Location header
+        location = create_resp.headers.get("Location")
+        if not location:
+            # Fallback: search for user by username
+            search_resp = await client.get(
+                f"{KEYCLOAK_URL}/admin/realms/ragnarok/users?username={req.username}",
+                headers={"Authorization": f"Bearer {admin_token}"}
+            )
+            if search_resp.status_code != 200 or not search_resp.json():
+                raise HTTPException(status_code=500, detail="User created but could not retrieve details")
+            user_id = search_resp.json()[0]["id"]
+        else:
+            user_id = location.split("/")[-1]
+
+        # 4. Get Realm Roles from Keycloak to find the target role metadata
+        roles_resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/roles",
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        if roles_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to retrieve Keycloak realm roles")
+        
+        roles = roles_resp.json()
+        target_role = next((r for r in roles if r["name"] == req.role), None)
+        if not target_role:
+            raise HTTPException(status_code=400, detail=f"Target role '{req.role}' not found in Keycloak")
+
+        # 5. Map Role to User
+        role_map_resp = await client.post(
+            f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}/role-mappings/realm",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=[target_role]
+        )
+        if role_map_resp.status_code != 204 and role_map_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to assign role to user")
+
+        # If admin is requested, we map both "admin" and "user" roles (Keycloak standard)
+        if req.role == "admin":
+            user_role = next((r for r in roles if r["name"] == "user"), None)
+            if user_role:
+                await client.post(
+                    f"{KEYCLOAK_URL}/admin/realms/ragnarok/users/{user_id}/role-mappings/realm",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    json=[user_role]
+                )
+
+    return {"status": "success", "message": f"User '{req.username}' onboarded successfully with role '{req.role}'"}

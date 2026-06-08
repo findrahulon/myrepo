@@ -73,3 +73,94 @@ export interface ChatMessage {
     model_used: string;
   };
 }
+
+export interface AuditStats {
+  total_queries: number;
+  avg_latency_ms: number;
+  avg_confidence: number;
+  confidence_distribution: {
+    HIGH: number;
+    MEDIUM: number;
+    LOW: number;
+  };
+  escalations: {
+    PENDING: number;
+    RESOLVED: number;
+  };
+}
+
+export interface AuditLog {
+  id: string;
+  username?: string;
+  query_text: string;
+  response_text: string;
+  confidence_score?: number;
+  confidence_level?: 'HIGH' | 'MEDIUM' | 'LOW';
+  latency_ms?: number;
+  model_used?: string;
+  escalation_status?: 'NONE' | 'PENDING' | 'RESOLVED';
+  created_at?: string;
+}
+
+export interface Escalation {
+  id: string;
+  username?: string;
+  query_text: string;
+  response_text: string;
+  confidence_score?: number;
+  confidence_level?: 'HIGH' | 'MEDIUM' | 'LOW';
+  reason?: string;
+  requested_by?: string;
+  escalated_at?: string;
+  resolved_at?: string;
+  resolution?: string;
+}
+
+export interface FeedbackStats {
+  total_feedback: number;
+  avg_rating: number;
+  positive: number;
+  negative: number;
+  corrections: number;
+  worst_queries: Array<{
+    query_text: string;
+    feedback_count: number;
+    avg_rating: number;
+    first_seen?: string;
+    last_seen?: string;
+  }>;
+  satisfaction_trend: Array<{
+    date?: string;
+    feedback_count: number;
+    avg_rating: number;
+  }>;
+}
+
+export interface ServiceHealth {
+  name: string;
+  role: string;
+  status: 'UP' | 'DOWN' | 'DEGRADED';
+  latency_ms: number;
+  detail: string;
+}
+
+export interface ServiceHealthReport {
+  services: ServiceHealth[];
+  summary: {
+    total: number;
+    up: number;
+    down: number;
+    degraded: number;
+    checked_at: string;
+  };
+}
+
+export interface URLIngestResponse {
+  status: string;
+  data: {
+    document_id: string;
+    filename: string;
+    chunks_created: number;
+    vectors_stored: number;
+  };
+}
