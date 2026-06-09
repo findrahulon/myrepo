@@ -1,7 +1,10 @@
 import Keycloak from 'keycloak-js';
 
+const host = window.location.hostname;
+const keycloakBase = `http://${host}:8080`;
+
 const keycloak = new Keycloak({
-  url: 'http://localhost:8080',
+  url: keycloakBase,
   realm: 'ragnarok',
   clientId: 'ragnarok-app',
 });
