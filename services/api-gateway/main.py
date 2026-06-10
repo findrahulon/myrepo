@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Optional
@@ -40,6 +41,47 @@ AUDIT_SERVICE = os.getenv("AUDIT_SERVICE_URL", "http://localhost:8010")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ragnarok")
 QUERY_TIMEOUT_SECONDS = float(os.getenv("QUERY_TIMEOUT_SECONDS", "300"))
+
+# Jira Integration settings
+JIRA_URL = os.getenv("JIRA_URL")
+JIRA_AUTH_METHOD = os.getenv("JIRA_AUTH_METHOD", "basic")
+JIRA_EMAIL = os.getenv("JIRA_EMAIL")
+JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
+JIRA_SYNC_JQL = os.getenv("JIRA_SYNC_JQL", "project = 'RAG'")
+
+
+def get_jira_headers() -> dict:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    if not JIRA_API_TOKEN:
+        return headers
+
+    if JIRA_AUTH_METHOD == "basic" and JIRA_EMAIL:
+        cred = f"{JIRA_EMAIL}:{JIRA_API_TOKEN}"
+        encoded = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
+        headers["Authorization"] = f"Basic {encoded}"
+    else:
+        headers["Authorization"] = f"Bearer {JIRA_API_TOKEN}"
+
+    return headers
+
+
+def extract_adf_text(node) -> str:
+    if not node:
+        return ""
+    if isinstance(node, dict):
+        if node.get("type") == "text" and "text" in node:
+            return node["text"]
+        text_parts = []
+        for k, v in node.items():
+            if isinstance(v, (dict, list)):
+                text_parts.append(extract_adf_text(v))
+        return "".join(text_parts)
+    elif isinstance(node, list):
+        return "".join(extract_adf_text(item) for item in node)
+    return ""
 
 _jwks_cache: dict = {}
 
@@ -158,6 +200,10 @@ class UpdatePasswordRequest(BaseModel):
     password: str
 
 
+class JiraSyncRequest(BaseModel):
+    jql: Optional[str] = None
+
+
 def require_admin(token_payload: dict) -> dict:
     user = extract_user_info(token_payload)
     if user["access_level"] != "admin":
@@ -266,6 +312,145 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
         )
         retrieval_data = retrieval_resp.json()
         chunks = retrieval_data.get("chunks", [])
+
+        # Real-time Jira issue lookup
+        jira_chunks = []
+        if JIRA_URL:
+            # Find matching keys in query e.g. TS0-1, RAG-123, PROJ-456, etc.
+            issue_keys = list(set(re.findall(r'\b([A-Z][A-Z0-9]{1,9}-\d+)\b', req.query)))
+            if issue_keys:
+                clean_jira_url = JIRA_URL.rstrip('/')
+                jira_headers = get_jira_headers()
+                for key in issue_keys[:3]:  # Limit to 3 real-time lookups to avoid huge overhead
+                    try:
+                        # Try v3 first
+                        issue_url = f"{clean_jira_url}/rest/api/3/issue/{key}"
+                        params = {"fields": "summary,description,status,priority,assignee,reporter,comment,created"}
+                        resp = await client.get(issue_url, headers=jira_headers, params=params)
+                        if resp.status_code == 404:
+                            # Try v2
+                            issue_url = f"{clean_jira_url}/rest/api/2/issue/{key}"
+                            resp = await client.get(issue_url, headers=jira_headers, params=params)
+
+                        if resp.status_code == 200:
+                            issue_data = resp.json()
+                            fields = issue_data.get("fields", {})
+                            summary = fields.get("summary", "No Summary")
+
+                            desc_field = fields.get("description")
+                            description = ""
+                            if desc_field:
+                                if isinstance(desc_field, dict) and "content" in desc_field:
+                                    description = extract_adf_text(desc_field)
+                                else:
+                                    description = str(desc_field)
+
+                            status = fields.get("status", {}).get("name", "Unknown")
+                            priority = fields.get("priority", {}).get("name", "None")
+                            assignee = fields.get("assignee", {}).get("displayName") if fields.get("assignee") else "Unassigned"
+                            reporter = fields.get("reporter", {}).get("displayName") if fields.get("reporter") else "Unknown"
+                            created = fields.get("created", "Unknown")
+
+                            comments_data = fields.get("comment", {}).get("comments", [])
+                            comments_text = ""
+                            for c in comments_data[:5]:
+                                author = c.get("author", {}).get("displayName", "User")
+                                body = c.get("body")
+                                comment_str = ""
+                                if body:
+                                    if isinstance(body, dict) and "content" in body:
+                                        comment_str = extract_adf_text(body)
+                                    else:
+                                        comment_str = str(body)
+                                comments_text += f"\n- *{author}*: {comment_str}"
+
+                            ticket_md = f"""[LIVE JIRA DATA] Issue: {key}
+Summary: {summary}
+Status: {status}
+Priority: {priority}
+Assignee: {assignee}
+Reporter: {reporter}
+Created: {created}
+
+Description:
+{description}
+
+Comments:
+{comments_text if comments_text else "No comments."}"""
+
+                            # Append as a mock chunk
+                            jira_chunks.append({
+                                "id": f"jira-{key}",
+                                "chunk_text": ticket_md,
+                                "document_id": f"jira-{key}",
+                                "filename": f"jira-{key}.txt",
+                                "chunk_index": 0,
+                                "page_number": 1,
+                                "section": "Jira Real-Time Status",
+                                "relevance_score": 1.0
+                            })
+                    except Exception as e:
+                        # Log error but don't fail the whole query
+                        print(f"Jira real-time lookup failed for {key}: {str(e)}")
+            else:
+                # Check for general Jira keywords
+                query_lower = req.query.lower()
+                keywords = ["jira", "ticket", "issue", "task", "test-space-01", "ts0"]
+                if any(kw in query_lower for kw in keywords):
+                    try:
+                        clean_jira_url = JIRA_URL.rstrip('/')
+                        jira_headers = get_jira_headers()
+                        search_url = f"{clean_jira_url}/rest/api/3/search/jql"
+                        params = {
+                            "jql": "project = 'TS0' ORDER BY updated DESC",
+                            "fields": "summary,status,priority,assignee,reporter,created",
+                            "maxResults": 50
+                        }
+                        resp = await client.get(search_url, headers=jira_headers, params=params)
+
+                        # Fallbacks
+                        if resp.status_code in (404, 410):
+                            search_url = f"{clean_jira_url}/rest/api/3/search"
+                            resp = await client.get(search_url, headers=jira_headers, params=params)
+                        if resp.status_code in (404, 410):
+                            search_url = f"{clean_jira_url}/rest/api/2/search"
+                            resp = await client.get(search_url, headers=jira_headers, params=params)
+
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            issues = data.get("issues", [])
+                            if issues:
+                                # Format list of issues into a directory
+                                issues_list = []
+                                for issue in issues:
+                                    key = issue.get("key")
+                                    fields = issue.get("fields", {})
+                                    summary = fields.get("summary", "No Summary")
+                                    status = fields.get("status", {}).get("name", "Unknown")
+                                    priority = fields.get("priority", {}).get("name", "None")
+                                    assignee = fields.get("assignee", {}).get("displayName") if fields.get("assignee") else "Unassigned"
+                                    reporter = fields.get("reporter", {}).get("displayName") if fields.get("reporter") else "Unknown"
+                                    issues_list.append(
+                                        f"- {key}: {summary} (Status: {status}, Assignee: {assignee}, Priority: {priority}, Reporter: {reporter})"
+                                    )
+
+                                directory_text = "[LIVE JIRA DATA] Active Issues in Project test-space-01 (TS0):\n" + "\n".join(issues_list)
+
+                                jira_chunks.append({
+                                    "id": "jira-project-directory",
+                                    "chunk_text": directory_text,
+                                    "document_id": "jira-project-directory",
+                                    "filename": "jira-project-directory.txt",
+                                    "chunk_index": 0,
+                                    "page_number": 1,
+                                    "section": "Jira Project Ticket Directory",
+                                    "relevance_score": 1.0
+                                })
+                    except Exception as e:
+                        print(f"Jira real-time project list lookup failed: {str(e)}")
+
+        chunks = jira_chunks + chunks
+
         if not chunks:
             latency_ms = int((time.time() - start) * 1000)
             return {
@@ -303,7 +488,6 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
             }
 
         # 2. Generate answer via LLM
-        logger.info(f"[{request_id}] Step 2: Generating answer via LLM ({LLM_SERVICE}), {len(chunks)} chunks")
         llm_resp = await client.post(
             f"{LLM_SERVICE}/generate",
             json={"query": req.query, "chunks": chunks},
@@ -311,7 +495,6 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
         llm_data = llm_resp.json()
         answer = llm_data.get("answer", "I could not generate an answer.")
         model_used = llm_data.get("model_used", "unknown")
-        logger.info(f"[{request_id}] Step 2 complete: model={model_used}")
 
         # 3. Generate citations
         citation_resp = await client.post(
@@ -619,6 +802,17 @@ async def list_documents(token_payload: dict = Depends(validate_token)):
 @app.get("/api/v1/documents/{document_id}/download")
 async def download_document(document_id: str, token_payload: dict = Depends(validate_token)):
     """Download or view the original source document for a citation."""
+    if document_id.startswith("jira-") and JIRA_URL:
+        # For real-time lookup citations
+        issue_key = document_id.replace("jira-", "")
+        clean_jira_url = JIRA_URL.rstrip('/')
+        jira_issue_url = f"{clean_jira_url}/browse/{issue_key}"
+        return Response(
+            content=f"Redirecting to Jira issue: {jira_issue_url}",
+            status_code=200,
+            headers={"X-Source-URL": jira_issue_url}
+        )
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(f"{DOCUMENT_SERVICE}/documents/{document_id}/download")
 
@@ -628,9 +822,26 @@ async def download_document(document_id: str, token_payload: dict = Depends(vali
         raise HTTPException(status_code=resp.status_code, detail="Document download failed")
 
     headers = {}
-    content_disposition = resp.headers.get("content-disposition")
+    content_disposition = resp.headers.get("content-disposition", "")
     if content_disposition:
         headers["Content-Disposition"] = content_disposition
+
+    # For synced database citations with jira-*.txt filenames
+    if "jira-" in content_disposition and JIRA_URL:
+        # Extract issue key from content-disposition (e.g. filename="jira-TS0-1.txt")
+        match = re.search(r'jira-([A-Za-z0-9-]+)', content_disposition)
+        if match:
+            issue_key = match.group(1)
+            # Remove trailing .txt if captured
+            if issue_key.endswith(".txt"):
+                issue_key = issue_key[:-4]
+            clean_jira_url = JIRA_URL.rstrip('/')
+            jira_issue_url = f"{clean_jira_url}/browse/{issue_key}"
+            return Response(
+                content=f"Redirecting to Jira issue: {jira_issue_url}",
+                status_code=200,
+                headers={"X-Source-URL": jira_issue_url}
+            )
 
     source_url = resp.headers.get("x-source-url")
     if source_url:
@@ -985,3 +1196,238 @@ async def delete_user(
             raise HTTPException(status_code=500, detail=f"Failed to delete user in Keycloak: {delete_resp.text}")
 
     return {"status": "success", "message": "User deleted successfully"}
+
+
+@app.post("/api/v1/jira/sync")
+async def sync_jira_tickets(
+    req: Optional[JiraSyncRequest] = None,
+    token_payload: dict = Depends(validate_token),
+):
+    """Sync tickets from Jira using JQL and load them semantically (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can sync Jira tickets")
+
+    if not JIRA_URL:
+        raise HTTPException(status_code=400, detail="Jira integration is not configured")
+
+    jql_query = req.jql if req and req.jql else JIRA_SYNC_JQL
+    jira_headers = get_jira_headers()
+    clean_jira_url = JIRA_URL.rstrip('/')
+
+    # 1. Fetch issues from Jira
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            search_url = f"{clean_jira_url}/rest/api/3/search/jql"
+            params = {
+                "jql": jql_query,
+                "fields": "summary,description,status,priority,assignee,reporter,comment,created",
+                "maxResults": 50
+            }
+            resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            # Fallback to older GET /search if /search/jql is 404 or 410
+            if resp.status_code in (404, 410):
+                search_url = f"{clean_jira_url}/rest/api/3/search"
+                resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            # Fallback to api/2 if api/3 fails with 404 or 410
+            if resp.status_code in (404, 410):
+                search_url = f"{clean_jira_url}/rest/api/2/search"
+                resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            if resp.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Jira API search failed: {resp.status_code} - {resp.text}")
+
+            data = resp.json()
+            issues = data.get("issues", [])
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error connecting to Jira: {str(e)}")
+
+        if not issues:
+            return {"status": "success", "message": "No issues found matching JQL.", "count": 0}
+
+        # 2. Formulate and Ingest each issue
+        synced_count = 0
+        errors = []
+
+        for issue in issues:
+            key = issue.get("key")
+            fields = issue.get("fields", {})
+            summary = fields.get("summary", "No Summary")
+
+            # Extract description
+            desc_field = fields.get("description")
+            description = ""
+            if desc_field:
+                if isinstance(desc_field, dict) and "content" in desc_field:
+                    description = extract_adf_text(desc_field)
+                else:
+                    description = str(desc_field)
+
+            status = fields.get("status", {}).get("name", "Unknown")
+            priority = fields.get("priority", {}).get("name", "None")
+            assignee = fields.get("assignee", {}).get("displayName") if fields.get("assignee") else "Unassigned"
+            reporter = fields.get("reporter", {}).get("displayName") if fields.get("reporter") else "Unknown"
+            created = fields.get("created", "Unknown")
+
+            # Extract comments
+            comments_data = fields.get("comment", {}).get("comments", [])
+            comments_text = ""
+            for c in comments_data[:5]:
+                author = c.get("author", {}).get("displayName", "User")
+                body = c.get("body")
+                comment_str = ""
+                if body:
+                    if isinstance(body, dict) and "content" in body:
+                        comment_str = extract_adf_text(body)
+                    else:
+                        comment_str = str(body)
+                comments_text += f"\n- *{author}*: {comment_str}"
+
+            # Construct markdown document
+            ticket_md = f"""# Jira Ticket: {key}
+**Summary:** {summary}
+**Status:** {status}
+**Priority:** {priority}
+**Assignee:** {assignee}
+**Reporter:** {reporter}
+**Created:** {created}
+
+## Description:
+{description}
+
+## Comments:
+{comments_text if comments_text else "No comments."}
+"""
+            filename = f"jira-{key}.txt"
+            content_bytes = ticket_md.encode("utf-8")
+
+            try:
+                files = {"file": (filename, content_bytes, "text/plain")}
+                doc_resp = await client.post(
+                    f"{DOCUMENT_SERVICE}/upload",
+                    files=files,
+                    data={
+                        "uploaded_by": user["username"],
+                        "department": "engineering",
+                        "access_level": "basic",
+                    },
+                )
+                if doc_resp.status_code != 200:
+                    errors.append(f"Upload failed for {key}: {doc_resp.text}")
+                    continue
+                doc_data = doc_resp.json()
+                document_id = doc_data["document_id"]
+
+                # Chunk the document
+                chunk_resp = await client.post(
+                    f"{CHUNKING_SERVICE}/chunk",
+                    json={
+                        "document_id": document_id,
+                        "minio_path": doc_data["minio_path"],
+                        "filename": filename,
+                    },
+                )
+                if chunk_resp.status_code != 200:
+                    errors.append(f"Chunking failed for {key}: {chunk_resp.text}")
+                    continue
+                chunk_data = chunk_resp.json()
+
+                # Embed the chunks
+                embed_resp = await client.post(
+                    f"{EMBEDDING_SERVICE}/embed",
+                    json={
+                        "document_id": document_id,
+                        "filename": filename,
+                        "chunks": chunk_data.get("chunks", []),
+                    },
+                )
+                if embed_resp.status_code != 200:
+                    errors.append(f"Embedding failed for {key}: {embed_resp.text}")
+                    continue
+
+                synced_count += 1
+            except Exception as ex:
+                errors.append(f"Error processing {key}: {str(ex)}")
+
+    return {
+        "status": "success",
+        "message": f"Successfully synced {synced_count} Jira issues.",
+        "count": synced_count,
+        "errors": errors
+    }
+
+
+@app.get("/api/v1/jira/live-issues")
+async def get_jira_live_issues(
+    jql: Optional[str] = "project = 'TS0'",
+    token_payload: dict = Depends(validate_token),
+):
+    """Fetch issues from Jira in real-time without syncing to DB (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view live Jira issues")
+
+    if not JIRA_URL:
+        raise HTTPException(status_code=400, detail="Jira integration is not configured")
+
+    jql_query = jql if jql else "project = 'TS0'"
+    jira_headers = get_jira_headers()
+    clean_jira_url = JIRA_URL.rstrip('/')
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            # 1. Fetch issues using /rest/api/3/search/jql
+            search_url = f"{clean_jira_url}/rest/api/3/search/jql"
+            params = {
+                "jql": jql_query,
+                "fields": "summary,status,priority,assignee,reporter,created",
+                "maxResults": 50
+            }
+            resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            # Fallback to GET /search if search/jql is 404 or 410
+            if resp.status_code in (404, 410):
+                search_url = f"{clean_jira_url}/rest/api/3/search"
+                resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            # Fallback to api/2 if v3 fails
+            if resp.status_code in (404, 410):
+                search_url = f"{clean_jira_url}/rest/api/2/search"
+                resp = await client.get(search_url, headers=jira_headers, params=params)
+
+            if resp.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Jira API search failed: {resp.status_code} - {resp.text}")
+
+            data = resp.json()
+            issues = data.get("issues", [])
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(status_code=500, detail=f"Error connecting to Jira: {str(e)}")
+
+        # 2. Format list of issues
+        live_issues = []
+        for issue in issues:
+            key = issue.get("key")
+            fields = issue.get("fields", {})
+            summary = fields.get("summary", "No Summary")
+            status = fields.get("status", {}).get("name", "Unknown")
+            priority = fields.get("priority", {}).get("name", "None")
+            assignee = fields.get("assignee", {}).get("displayName") if fields.get("assignee") else "Unassigned"
+            reporter = fields.get("reporter", {}).get("displayName") if fields.get("reporter") else "Unknown"
+            created = fields.get("created", "Unknown")
+
+            live_issues.append({
+                "key": key,
+                "summary": summary,
+                "status": status,
+                "priority": priority,
+                "assignee": assignee,
+                "reporter": reporter,
+                "created": created
+            })
+
+        return live_issues
+

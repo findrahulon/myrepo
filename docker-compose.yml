@@ -189,6 +189,11 @@ services:
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: ragnarok
       QUERY_TIMEOUT_SECONDS: 300
+      JIRA_URL: ${JIRA_URL}
+      JIRA_AUTH_METHOD: ${JIRA_AUTH_METHOD}
+      JIRA_EMAIL: ${JIRA_EMAIL}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_SYNC_JQL: ${JIRA_SYNC_JQL}
     depends_on:
       keycloak:
         condition: service_healthy
