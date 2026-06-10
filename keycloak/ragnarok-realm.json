@@ -39,14 +39,15 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
-      "rootUrl": "http://localhost:3000",
+      "rootUrl": "",
       "baseUrl": "/",
       "redirectUris": [
-        "http://localhost:3000/*"
+        "http://localhost:3000/*",
+        "http://localhost:8000/*",
+        "*"
       ],
       "webOrigins": [
-        "http://localhost:3000",
-        "http://localhost:8000"
+        "+"
       ],
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
