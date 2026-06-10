@@ -59,8 +59,10 @@ import {
   getUsers,
   updateUserPassword,
   deleteUser,
+  syncJiraTickets,
+  getJiraLiveIssues,
 } from '../services/api';
-import type { User } from '../services/api';
+import type { User, JiraLiveIssue } from '../services/api';
 import keycloak from '../services/keycloak';
 import type {
   AuditLog,
@@ -919,6 +921,242 @@ const ManageUsersTab: React.FC = () => {
 };
 
 
+const JiraIntegrationTab: React.FC = () => {
+  const [jql, setJql] = useState('project = "TS0"');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ message: string; count: number; errors?: string[] } | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Live issue viewer states
+  const [liveIssues, setLiveIssues] = useState<JiraLiveIssue[]>([]);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveJql, setLiveJql] = useState('project = "TS0"');
+
+  const fetchLiveIssues = async () => {
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const issues = await getJiraLiveIssues(liveJql);
+      setLiveIssues(issues);
+    } catch (err) {
+      setLiveError(err instanceof Error ? err.message : 'Failed to fetch live Jira issues');
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveIssues();
+  }, []);
+
+  const handleSync = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMsg(null);
+    setResult(null);
+
+    try {
+      const resp = await syncJiraTickets(jql);
+      setResult(resp);
+      // Refresh live issues after sync completes successfully
+      fetchLiveIssues();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to sync Jira tickets');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box sx={{ p: 3, maxWidth: 900, mx: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      
+      {/* CARD 1: Live Issue Viewer */}
+      <Paper sx={{ p: 4, borderRadius: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
+              Live Jira Issues
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Real-time ticket status directly from Jira for project <strong>test-space-01</strong> (key: TS0).
+            </Typography>
+          </Box>
+          <Button
+            size="small"
+            startIcon={liveLoading ? <CircularProgress size={12} /> : <Refresh />}
+            variant="outlined"
+            onClick={fetchLiveIssues}
+            disabled={liveLoading}
+          >
+            Refresh
+          </Button>
+        </Box>
+
+        <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start' }}>
+          <TextField
+            label="Live JQL Filter"
+            placeholder="project = 'TS0'"
+            value={liveJql}
+            onChange={(e) => setLiveJql(e.target.value)}
+            disabled={liveLoading}
+            size="small"
+            sx={{ flex: 1 }}
+          />
+          <Button
+            variant="contained"
+            onClick={fetchLiveIssues}
+            disabled={liveLoading}
+            sx={{ height: 40 }}
+          >
+            Query
+          </Button>
+        </Box>
+
+        {liveError && <Alert severity="error" sx={{ mb: 2 }}>{liveError}</Alert>}
+
+        {liveLoading && liveIssues.length === 0 ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : liveIssues.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+            No live issues found. Try adjusting your JQL filter.
+          </Typography>
+        ) : (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 700 }}>Key</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Summary</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Assignee</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Priority</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Created</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {liveIssues.map((issue) => (
+                <TableRow key={issue.key} hover>
+                  <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{issue.key}</TableCell>
+                  <TableCell>{issue.summary}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={issue.status}
+                      size="small"
+                      color={
+                        issue.status.toLowerCase() === 'done' ? 'success' :
+                        issue.status.toLowerCase() === 'in progress' ? 'warning' : 'default'
+                      }
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell>{issue.assignee}</TableCell>
+                  <TableCell>{issue.priority}</TableCell>
+                  <TableCell sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                    {new Date(issue.created).toLocaleDateString()}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Paper>
+
+      {/* CARD 2: Bulk Sync Ingestion */}
+      <Paper sx={{ p: 4, borderRadius: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>
+          RAG Vector Ingestion Sync
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+          Ingest and embed Jira tickets dynamically into the RAG vector store for semantic querying.
+        </Typography>
+
+        <Box component="form" onSubmit={handleSync} sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          {errorMsg && <Alert severity="error">{errorMsg}</Alert>}
+          {result && (
+            <Alert severity={result.errors && result.errors.length > 0 ? "warning" : "success"}>
+              {result.message}
+            </Alert>
+          )}
+
+          <TextField
+            label="Jira Query Language (JQL) for Ingestion"
+            placeholder="project = 'TS0'"
+            value={jql}
+            onChange={(e) => setJql(e.target.value)}
+            required
+            fullWidth
+            disabled={loading}
+            size="small"
+            helperText="Specify the JQL statement to select issues for vector embedding sync"
+          />
+
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={loading}
+            fullWidth
+            sx={{ py: 1.2, fontWeight: 600 }}
+          >
+            {loading ? <CircularProgress size={24} color="inherit" /> : 'Sync Jira Tickets to Vector DB'}
+          </Button>
+        </Box>
+      </Paper>
+
+      {/* Console Output */}
+      {result && (
+        <Paper
+          sx={{
+            p: 2.5,
+            bgcolor: '#090d16',
+            color: '#10b981',
+            fontFamily: 'monospace',
+            fontSize: '0.85rem',
+            borderRadius: 2,
+            border: '1px solid #1f2937',
+            maxHeight: 250,
+            overflowY: 'auto',
+          }}
+        >
+          <Typography variant="subtitle2" sx={{ color: '#e5e7eb', fontWeight: 600, mb: 1.5, fontFamily: 'sans-serif' }}>
+            Ingestion Console Output
+          </Typography>
+          <div style={{ marginBottom: '8px' }}>
+            <span style={{ color: '#6b7280' }}>[{new Date().toLocaleTimeString()}]</span> Ingestion started...
+          </div>
+          <div style={{ marginBottom: '8px' }}>
+            <span style={{ color: '#6b7280' }}>[{new Date().toLocaleTimeString()}]</span> Executing JQL: <span style={{ color: '#3b82f6' }}>{jql}</span>
+          </div>
+          <div style={{ marginBottom: '8px' }}>
+            <span style={{ color: '#6b7280' }}>[{new Date().toLocaleTimeString()}]</span> Found <span style={{ color: '#fbbf24' }}>{result.count}</span> issues matching criteria.
+          </div>
+          {result.count > 0 && (
+            <div style={{ marginBottom: '8px', color: '#34d399' }}>
+              <span style={{ color: '#6b7280' }}>[{new Date().toLocaleTimeString()}]</span> Successfully synced {result.count} issues into the Vector store.
+            </div>
+          )}
+          {result.errors && result.errors.length > 0 && (
+            <div style={{ marginTop: '8px' }}>
+              <div style={{ color: '#f87171', fontWeight: 'bold', marginBottom: '4px' }}>Errors encountered:</div>
+              {result.errors.map((err, idx) => (
+                <div key={idx} style={{ color: '#f87171', paddingLeft: '8px', marginBottom: '2px' }}>
+                  • {err}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ color: '#6b7280', marginTop: '12px' }}>
+            --- End of Ingestion Job ---
+          </div>
+        </Paper>
+      )}
+    </Box>
+  );
+};
+
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────
 const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
@@ -981,6 +1219,7 @@ const AdminDashboard: React.FC = () => {
           <Tab label="Service Logs" />
           <Tab label="Onboard User" />
           <Tab label="Manage Users" />
+          <Tab label="Jira Integration" />
         </Tabs>
       </Box>
 
@@ -1135,6 +1374,9 @@ const AdminDashboard: React.FC = () => {
 
       {/* Manage Users tab */}
       {tab === 4 && <Box sx={{ flex: 1, overflow: 'auto' }}><ManageUsersTab /></Box>}
+
+      {/* Jira Integration tab */}
+      {tab === 5 && <Box sx={{ flex: 1, overflow: 'auto' }}><JiraIntegrationTab /></Box>}
     </Box>
   );
 };

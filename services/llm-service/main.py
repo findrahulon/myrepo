@@ -80,8 +80,8 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 100,
-                        "num_ctx": 128,
+                        "num_predict": 512,
+                        "num_ctx": 2048,
                         "num_batch": 8,
                         "num_gpu": 0,
                         "num_thread": 2,
@@ -115,8 +115,8 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 100,
-                        "num_ctx": 128,
+                        "num_predict": 512,
+                        "num_ctx": 2048,
                         "num_batch": 8,
                         "num_gpu": 0,
                         "num_thread": 2,
