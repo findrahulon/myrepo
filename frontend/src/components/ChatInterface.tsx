@@ -130,7 +130,7 @@ const ChatInterface: React.FC<Props> = ({ username }) => {
           placeholder="Ask a question about your documents..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
           disabled={loading}
           size="small"
           multiline

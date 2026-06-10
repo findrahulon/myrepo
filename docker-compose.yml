@@ -144,6 +144,29 @@ services:
       OLLAMA_KEEP_ALIVE: 5m
       OLLAMA_NUM_PARALLEL: 1
       OLLAMA_NUM_GPU: 1
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q '.' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ragnarok
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Ensuring model 'phi' is available..."
+        ollama pull phi
+        echo "Model 'phi' is ready."
+    environment:
+      OLLAMA_HOST: http://ollama:11434
     networks:
       - ragnarok
 
@@ -239,7 +262,8 @@ services:
       PRIMARY_MODEL: phi
       FALLBACK_MODEL: phi
     depends_on:
-      - ollama
+      ollama-init:
+        condition: service_completed_successfully
     networks:
       - ragnarok
 
