@@ -390,3 +390,50 @@ export async function deleteUser(userId: string): Promise<{ status: string; mess
   }
   return response.json();
 }
+
+export interface JiraSyncResponse {
+  status: string;
+  message: string;
+  count: number;
+  errors?: string[];
+}
+
+export async function syncJiraTickets(jql?: string): Promise<JiraSyncResponse> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/jira/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jql }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Jira sync failed: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export interface JiraLiveIssue {
+  key: string;
+  summary: string;
+  status: string;
+  priority: string;
+  assignee: string;
+  reporter: string;
+  created: string;
+}
+
+export async function getJiraLiveIssues(jql?: string): Promise<JiraLiveIssue[]> {
+  const headers = await getHeaders();
+  const queryParam = jql ? `?jql=${encodeURIComponent(jql)}` : '';
+  const response = await fetch(`${API_BASE}/jira/live-issues${queryParam}`, {
+    method: 'GET',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch live Jira issues: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+

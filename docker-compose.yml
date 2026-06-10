@@ -71,7 +71,7 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
-    command: start-dev --import-realm
+    command: start-dev --import-realm --health-enabled=true
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/ragnarok
@@ -79,6 +79,7 @@ services:
       KC_DB_PASSWORD: ragnarok_secret
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin123
+      KC_HEALTH_ENABLED: "true"
     ports:
       - "8080:8080"
     volumes:
@@ -127,6 +128,11 @@ services:
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: ragnarok
       QUERY_TIMEOUT_SECONDS: 300
+      JIRA_URL: ${JIRA_URL}
+      JIRA_AUTH_METHOD: ${JIRA_AUTH_METHOD}
+      JIRA_EMAIL: ${JIRA_EMAIL}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_SYNC_JQL: ${JIRA_SYNC_JQL}
     depends_on:
       keycloak:
         condition: service_healthy
