@@ -71,7 +71,12 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
-    command: start-dev --import-realm --health-enabled=true
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        /opt/keycloak/bin/kc.sh import --dir /opt/keycloak/data/import --override true;
+        exec /opt/keycloak/bin/kc.sh start-dev --health-enabled=true
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/ragnarok
