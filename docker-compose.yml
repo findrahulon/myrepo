@@ -75,6 +75,16 @@ services:
     command:
       - -c
       - |
+        # Auto-detect EC2 public IP when PUBLIC_HOST is not set
+        if [ "$$KC_HOSTNAME" = "localhost" ]; then
+          echo "WARNING: KC_HOSTNAME is 'localhost'. Set PUBLIC_HOST in .env for remote deployments."
+          EC2_IP=$$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+          if [ -n "$$EC2_IP" ]; then
+            export KC_HOSTNAME="$$EC2_IP"
+            echo "Auto-detected EC2 public IP for Keycloak hostname: $$KC_HOSTNAME"
+          fi
+        fi
+        echo "Keycloak hostname: $$KC_HOSTNAME"
         /opt/keycloak/bin/kc.sh import --dir /opt/keycloak/data/import --override true;
         exec /opt/keycloak/bin/kc.sh start-dev --health-enabled=true
     environment:
@@ -89,6 +99,7 @@ services:
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
       KC_HTTP_ENABLED: "true"
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
     ports:
       - "8080:8080"
     volumes:
