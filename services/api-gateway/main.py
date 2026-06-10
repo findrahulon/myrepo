@@ -1,10 +1,14 @@
 """RAGnarok API Gateway — routes requests to downstream microservices."""
 
 import asyncio
+import logging
 import os
 import time
 import uuid
 from typing import Optional
+
+logger = logging.getLogger("api-gateway")
+logging.basicConfig(level=logging.INFO)
 
 import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request, Response
@@ -246,9 +250,11 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
     request_id = str(uuid.uuid4())
     start = time.time()
     user = extract_user_info(token_payload)
+    logger.info(f"[{request_id}] Query received from user '{user['username']}': {req.query[:100]}")
 
     async with httpx.AsyncClient(timeout=QUERY_TIMEOUT_SECONDS) as client:
         # 1. Retrieve relevant chunks
+        logger.info(f"[{request_id}] Step 1: Retrieving chunks from {RETRIEVAL_SERVICE}")
         retrieval_resp = await client.post(
             f"{RETRIEVAL_SERVICE}/retrieve",
             json={
@@ -297,6 +303,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
             }
 
         # 2. Generate answer via LLM
+        logger.info(f"[{request_id}] Step 2: Generating answer via LLM ({LLM_SERVICE}), {len(chunks)} chunks")
         llm_resp = await client.post(
             f"{LLM_SERVICE}/generate",
             json={"query": req.query, "chunks": chunks},
@@ -304,6 +311,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
         llm_data = llm_resp.json()
         answer = llm_data.get("answer", "I could not generate an answer.")
         model_used = llm_data.get("model_used", "unknown")
+        logger.info(f"[{request_id}] Step 2 complete: model={model_used}")
 
         # 3. Generate citations
         citation_resp = await client.post(

@@ -34,15 +34,27 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 export async function sendQuery(query: string): Promise<QueryResponse> {
   const headers = await getHeaders();
-  const response = await fetch(`${API_BASE}/query`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ query }),
-  });
-  if (!response.ok) {
-    throw new Error(`Query failed: ${response.statusText}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(`${API_BASE}/query`, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({ query }),
+    });
+    if (!response.ok) {
+      throw new Error(`Query failed: ${response.statusText}`);
+    }
+    return response.json();
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Query timed out. The LLM service may still be loading the model. Please try again in a moment.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 }
 
 export async function uploadDocument(
