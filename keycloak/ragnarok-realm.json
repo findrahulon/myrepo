@@ -47,7 +47,7 @@
         "*"
       ],
       "webOrigins": [
-        "+"
+        "*"
       ],
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
