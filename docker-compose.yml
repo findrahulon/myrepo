@@ -75,13 +75,31 @@ services:
     command:
       - -c
       - |
-        # Auto-detect EC2 public IP when PUBLIC_HOST is not set
+        # Auto-detect public IP when PUBLIC_HOST is not set
         if [ "$$KC_HOSTNAME" = "localhost" ]; then
-          echo "WARNING: KC_HOSTNAME is 'localhost'. Set PUBLIC_HOST in .env for remote deployments."
-          EC2_IP=$$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
-          if [ -n "$$EC2_IP" ]; then
-            export KC_HOSTNAME="$$EC2_IP"
-            echo "Auto-detected EC2 public IP for Keycloak hostname: $$KC_HOSTNAME"
+          echo "WARNING: KC_HOSTNAME is 'localhost'. Attempting public IP auto-detection..."
+          PUBLIC_IP=""
+          # Method 1: curl (if available)
+          if command -v curl >/dev/null 2>&1; then
+            PUBLIC_IP=$$(curl -sf --connect-timeout 3 http://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')
+          fi
+          # Method 2: bash /dev/tcp fallback (no curl needed)
+          if [ -z "$$PUBLIC_IP" ]; then
+            {
+              exec 3<>/dev/tcp/checkip.amazonaws.com/80
+              printf 'GET / HTTP/1.1\r\nHost: checkip.amazonaws.com\r\nConnection: close\r\n\r\n' >&3
+              while IFS= read -r -t 3 line || [ -n "$$line" ]; do
+                line="$${line%$$'\r'}"
+                [ -n "$$line" ] && PUBLIC_IP="$$line"
+              done <&3
+              exec 3<&-
+            } 2>/dev/null || true
+          fi
+          if [ -n "$$PUBLIC_IP" ]; then
+            export KC_HOSTNAME="$$PUBLIC_IP"
+            echo "Auto-detected public IP for Keycloak hostname: $$KC_HOSTNAME"
+          else
+            echo "ERROR: Could not auto-detect public IP. Set PUBLIC_HOST=<your-ip> in .env and restart."
           fi
         fi
         echo "Keycloak hostname: $$KC_HOSTNAME"
