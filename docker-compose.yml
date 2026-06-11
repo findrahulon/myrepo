@@ -264,8 +264,8 @@ services:
       - "8005:8005"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      PRIMARY_MODEL: phi
-      FALLBACK_MODEL: phi
+      PRIMARY_MODEL: llama3.1:8b
+      FALLBACK_MODEL: qwen3:8b
     depends_on:
       ollama-init:
         condition: service_completed_successfully
