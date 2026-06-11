@@ -305,7 +305,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
             f"{RETRIEVAL_SERVICE}/retrieve",
             json={
                 "query": req.query,
-                "top_k": 5,
+                "top_k": 3,
                 "access_level": user["access_level"],
                 "filters": req.filters,
             },
