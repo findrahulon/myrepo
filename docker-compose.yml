@@ -188,7 +188,7 @@ services:
       AUDIT_SERVICE_URL: http://audit-service:8010
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: ragnarok
-      QUERY_TIMEOUT_SECONDS: 300
+      QUERY_TIMEOUT_SECONDS: 600
       JIRA_URL: ${JIRA_URL}
       JIRA_AUTH_METHOD: ${JIRA_AUTH_METHOD}
       JIRA_EMAIL: ${JIRA_EMAIL}
