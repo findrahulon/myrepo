@@ -449,3 +449,49 @@ export async function getJiraLiveIssues(jql?: string): Promise<JiraLiveIssue[]> 
 }
 
 
+export interface ConfluenceLivePage {
+  id: string;
+  title: string;
+  space_key: string;
+  space_name: string;
+  created_by: string;
+  created_date: string;
+}
+
+export interface ConfluenceSyncResponse {
+  status: string;
+  message: string;
+  count: number;
+  errors?: string[];
+}
+
+export async function getConfluenceLivePages(space?: string): Promise<ConfluenceLivePage[]> {
+  const headers = await getHeaders();
+  const queryParam = space ? `?space=${encodeURIComponent(space)}` : '';
+  const response = await fetch(`${API_BASE}/confluence/live-pages${queryParam}`, {
+    method: 'GET',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch live Confluence pages: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function syncConfluencePages(space?: string): Promise<ConfluenceSyncResponse> {
+  const headers = await getHeaders();
+  const response = await fetch(`${API_BASE}/confluence/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ space }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Confluence sync failed: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+
+
