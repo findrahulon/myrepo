@@ -344,6 +344,9 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
                                     description = extract_adf_text(desc_field)
                                 else:
                                     description = str(desc_field)
+                            # Truncate description to avoid blowing up the LLM context
+                            if len(description) > 500:
+                                description = description[:500] + "..."
 
                             status = fields.get("status", {}).get("name", "Unknown")
                             priority = fields.get("priority", {}).get("name", "None")
@@ -353,7 +356,7 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
 
                             comments_data = fields.get("comment", {}).get("comments", [])
                             comments_text = ""
-                            for c in comments_data[:5]:
+                            for c in comments_data[:3]:
                                 author = c.get("author", {}).get("displayName", "User")
                                 body = c.get("body")
                                 comment_str = ""
@@ -362,6 +365,8 @@ async def query(req: QueryRequest, token_payload: dict = Depends(validate_token)
                                         comment_str = extract_adf_text(body)
                                     else:
                                         comment_str = str(body)
+                                if len(comment_str) > 200:
+                                    comment_str = comment_str[:200] + "..."
                                 comments_text += f"\n- *{author}*: {comment_str}"
 
                             ticket_md = f"""[LIVE JIRA DATA] Issue: {key}
@@ -404,7 +409,7 @@ Comments:
                         params = {
                             "jql": "project = 'TS0' ORDER BY updated DESC",
                             "fields": "summary,status,priority,assignee,reporter,created",
-                            "maxResults": 50
+                            "maxResults": 10
                         }
                         resp = await client.get(search_url, headers=jira_headers, params=params)
 
@@ -420,9 +425,9 @@ Comments:
                             data = resp.json()
                             issues = data.get("issues", [])
                             if issues:
-                                # Format list of issues into a directory
+                                # Format list of issues into a compact directory
                                 issues_list = []
-                                for issue in issues:
+                                for issue in issues[:10]:
                                     key = issue.get("key")
                                     fields = issue.get("fields", {})
                                     summary = fields.get("summary", "No Summary")

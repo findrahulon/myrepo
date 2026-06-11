@@ -4,6 +4,7 @@ import os
 import logging
 
 import httpx
+import tiktoken
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -26,26 +27,50 @@ Rules:
 5. If multiple sources agree, mention the agreement.
 6. Never fabricate information not present in the context."""
 
+NUM_CTX = 4096
+MAX_PROMPT_TOKENS = NUM_CTX - 512  # Reserve 512 tokens for generation
+
+
+def _count_tokens(text: str) -> int:
+    """Approximate token count using cl100k_base tokenizer."""
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return len(text) // 4  # Rough fallback
+
 
 def build_prompt(query: str, chunks: list[dict]) -> str:
-    """Build a prompt with context chunks for the LLM."""
+    """Build a prompt with context chunks for the LLM, truncating if needed to fit context window."""
+    # Build the suffix (query + instructions) first so we know how much room context gets
+    suffix = f"\n\nQuestion: {query}\n\nPlease provide a comprehensive answer based on the context above. Use inline citations [1], [2], etc."
+    system_tokens = _count_tokens(SYSTEM_PROMPT)
+    suffix_tokens = _count_tokens(suffix)
+    available_tokens = MAX_PROMPT_TOKENS - system_tokens - suffix_tokens - 50  # 50-token safety margin
+
     context_parts = []
+    used_tokens = 0
     for i, chunk in enumerate(chunks, 1):
         source_info = f"[Source {i}]"
         if chunk.get("page_number"):
             source_info += f" (Page {chunk['page_number']})"
         if chunk.get("document_id"):
             source_info += f" (Doc: {chunk['document_id'][:8]})"
-        context_parts.append(f"{source_info}\n{chunk.get('chunk_text', '')}")
+        part = f"{source_info}\n{chunk.get('chunk_text', '')}"
+        part_tokens = _count_tokens(part)
+        if used_tokens + part_tokens > available_tokens:
+            logger.warning(f"Truncating context at chunk {i}/{len(chunks)}: "
+                           f"{used_tokens + part_tokens} tokens would exceed {available_tokens} available")
+            break
+        context_parts.append(part)
+        used_tokens += part_tokens
 
     context = "\n\n---\n\n".join(context_parts)
+    prompt = f"""Context Documents:\n{context}{suffix}"""
 
-    return f"""Context Documents:
-{context}
-
-Question: {query}
-
-Please provide a comprehensive answer based on the context above. Use inline citations [1], [2], etc."""
+    total_tokens = _count_tokens(prompt) + system_tokens
+    logger.info(f"Prompt built: {len(context_parts)}/{len(chunks)} chunks, ~{total_tokens} tokens (limit {NUM_CTX})")
+    return prompt
 
 
 class GenerateRequest(BaseModel):
@@ -81,8 +106,8 @@ async def generate(req: GenerateRequest):
                         "temperature": 0.3,
                         "top_p": 0.9,
                         "num_predict": 512,
-                        "num_ctx": 2048,
-                        "num_batch": 8,
+                        "num_ctx": NUM_CTX,
+                        "num_batch": 32,
                         "num_gpu": 0,
                         "num_thread": 2,
                     },
@@ -116,8 +141,8 @@ async def generate(req: GenerateRequest):
                         "temperature": 0.3,
                         "top_p": 0.9,
                         "num_predict": 512,
-                        "num_ctx": 2048,
-                        "num_batch": 8,
+                        "num_ctx": NUM_CTX,
+                        "num_batch": 32,
                         "num_gpu": 0,
                         "num_thread": 2,
                     },
