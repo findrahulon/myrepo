@@ -61,7 +61,7 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
 | Object Storage | MinIO |
 | Embeddings | BAAI/bge-small-en-v1.5 via SentenceTransformers |
 | Vector DB | Qdrant Community Edition |
-| LLM | Ollama with llama3.1:8b (fallback qwen3:8b) |
+| LLM | Ollama with llama3.1:8b |
 
 ---
 
@@ -85,14 +85,10 @@ docker compose up -d --build
 
 ### 2. Pull an LLM Model
 
-After Ollama starts, pull a model (choose one):
+The `ollama-init` container automatically pulls `llama3.1:8b` on first startup. To manually pull or update:
 
 ```bash
-# Primary model (recommended)
 docker compose exec ollama ollama pull llama3.1:8b
-
-# OR fallback model
-docker compose exec ollama ollama pull qwen3:8b
 ```
 
 ### 3. Access the Application
