@@ -1,6 +1,7 @@
 """RAGnarok API Gateway — routes requests to downstream microservices."""
 
 import asyncio
+import base64
 import logging
 import os
 import re
