@@ -1,6 +1,6 @@
 # RAGnarok — Enterprise Knowledge Copilot
 
-A fully working Proof of Concept (POC) demonstrating a RAG-based enterprise knowledge assistant with **inline citations**, **confidence scoring**, **explainability**, **RBAC**, **feedback collection**, and **query audit logging**.
+A fully working Proof of Concept (POC) demonstrating a RAG-based enterprise knowledge assistant with **inline citations**, **confidence scoring**, **explainability**, **RBAC**, **feedback collection**, **query audit logging**, **Admin Console**, **Jira integration**, and **web link ingestion**.
 
 Built with 100% free/open-source technologies. Runs entirely locally using Docker Compose.
 
@@ -24,15 +24,20 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
   │          Infrastructure                  │     │
   │  PostgreSQL │ MinIO │ Qdrant            │     │
   └─────────────────────────────────────────┘     │
+                                                  │
+                                            ┌─────┴─────┐
+                                            │   Jira    │
+                                            │ (optional)│
+                                            └───────────┘
 ```
 
 ### Components (17 Docker Containers)
 
 | Container | Port | Technology | Purpose |
 |-----------|------|-----------|---------|
-| `frontend` | 3000 | React 18, Vite, TypeScript, MUI | Web UI with chat, sources, explanations |
-| `api-gateway` | 8000 | FastAPI | Routes requests, JWT validation |
-| `document-service` | 8001 | FastAPI, MinIO | PDF/DOCX upload and storage |
+| `frontend` | 3000 | React 18, Vite, TypeScript, MUI | Web UI with chat, admin console, sources, explanations |
+| `api-gateway` | 8000 | FastAPI | Routes requests, JWT validation, Jira integration |
+| `document-service` | 8001 | FastAPI, MinIO | PDF/DOCX upload, URL ingestion, and storage |
 | `chunking-service` | 8002 | FastAPI, tiktoken | 500-token chunks, 100-token overlap |
 | `embedding-service` | 8003 | FastAPI, SentenceTransformers | BGE embeddings → Qdrant |
 | `retrieval-service` | 8004 | FastAPI, Qdrant | Semantic search with RBAC filtering |
@@ -111,8 +116,8 @@ The Keycloak realm is pre-configured with two users:
 
 | Username | Password | Role | Access Level |
 |----------|----------|------|-------------|
-| `admin` | `admin123` | admin | Full access |
-| `user` | `user123` | user | Standard access |
+| `admin` | `admin123` | admin | Full access (includes Admin Console) |
+| `user` | `user123` | user | Standard access (chat and document viewing) |
 
 1. Open http://localhost:3000
 2. Click "Sign in with Keycloak"
@@ -120,24 +125,104 @@ The Keycloak realm is pre-configured with two users:
 
 ---
 
-## Usage Walkthrough
+## Features
 
-### Upload Documents
-1. In the left sidebar, select Department and Access Level
-2. Click "Select PDF or DOCX" and choose a file
-3. The file is uploaded to MinIO, chunked (500 tokens, 100 overlap), embedded with BGE, and stored in Qdrant
+### Chat Interface
+- Type a question in the chat input and press Enter or click Send
+- The system retrieves relevant chunks, generates a grounded answer via Ollama, and returns:
+  - **Answer** with inline `[1]`, `[2]` citations
+  - **Confidence score** (HIGH / MEDIUM / LOW) with breakdown
+  - **Sources panel** showing referenced document chunks
+  - **Explanation panel** with step-by-step reasoning trail
+- Low-confidence answers show an **"Escalate for Human Review"** button
 
-### Ask Questions
-1. Type a question in the chat input
-2. The system retrieves relevant chunks, generates a grounded answer via Ollama, and returns:
-   - **Answer** with inline `[1]`, `[2]` citations
-   - **Confidence score** (HIGH / MEDIUM / LOW) with breakdown
-   - **Sources panel** showing referenced document chunks
-   - **Explanation panel** with step-by-step reasoning trail
+### Document Upload (Admin)
+- In the left sidebar, select Department and Access Level
+- **File Upload** tab: Click "Select PDF or DOCX" to upload a local file
+- The file is uploaded to MinIO, chunked (500 tokens, 100 overlap), embedded with BGE, and stored in Qdrant
 
-### Provide Feedback
-- Quick: Click thumbs up/down on any response
-- Detailed: Click the feedback icon to rate (1-5 stars), add comments, or suggest corrections
+### Web Link Ingestion (Admin)
+- In the left sidebar, switch to the **Webpage Link** tab
+- Enter any public URL (e.g. `https://example.com/article`)
+- The system fetches the page, strips HTML (scripts, styles, nav, etc.), extracts clean text, stores it in MinIO, and runs the full chunking → embedding → vector store pipeline
+- Ingested web pages appear in the document list with a globe icon
+
+### Feedback & Escalation
+- **Quick feedback**: Click thumbs up/down on any response
+- **Detailed feedback**: Click the feedback icon to rate (1-5 stars), add comments, or suggest corrections
+- **Escalation**: Request human review for low-confidence answers — admins can resolve these in the Admin Console
+
+### Admin Console
+Admins see an **"Admin Dashboard"** button in the top toolbar. The console has six tabs:
+
+#### Metrics
+- **KPI cards**: Total queries, average confidence, average latency, pending reviews, average rating, total feedback
+- **Confidence distribution**: Bar chart showing HIGH / MEDIUM / LOW breakdown
+- **Latency distribution**: Bucketed into fast (< 1s), normal (1–5s), and slow (> 5s)
+- **Feedback signals**: Positive/negative/corrections count with worst-performing queries
+- **Satisfaction trend**: 14-day sparkline of average user rating
+- **Pending human reviews**: List of escalated queries awaiting resolution, with one-click resolve
+
+#### Audit Logs
+- Expandable table of recent queries with confidence score, latency, escalation status, and full response text
+- Model used per query
+
+#### Services
+- **Real-time health monitoring** of all 12 backend services
+- Services grouped by role (Core, ML, Processing, Storage, Data, Auth)
+- Each service shows UP / DOWN / DEGRADED status with latency
+- Auto-refreshes every 10 seconds
+
+#### Service Logs
+- **Live Docker container log viewer** for all 17 containers
+- Select any service from a dropdown to tail its logs
+- Syntax-highlighted output (errors in red, warnings in yellow, info in blue)
+- Configurable tail limit (50–1000 lines)
+- Auto-refresh toggle (5-second interval)
+- Copy logs to clipboard
+
+#### Onboard User
+- Create new users directly from the Admin Console (no need to open Keycloak admin UI)
+- Set username, first name, last name, email, password, and role (user or admin)
+- Users are created in Keycloak with the assigned realm role
+
+#### Manage Users
+- View all users in the Keycloak realm with their roles and creation dates
+- **Change password** for any user
+- **Delete users** (with safety checks: cannot delete yourself or the default admin)
+
+### Jira Integration
+RAGnarok integrates with Jira for both **real-time query augmentation** and **bulk knowledge ingestion**.
+
+#### Real-Time Query Augmentation
+When a user asks a question that references Jira issue keys (e.g. `TS0-1`, `PROJ-123`), the API gateway:
+1. Fetches the issue details live from Jira (summary, description, status, priority, assignee, comments)
+2. Injects them as high-priority context chunks before the LLM generates an answer
+3. Citations link back to the original Jira issue
+
+When a query mentions general Jira keywords ("jira", "ticket", "issue"), the system fetches and injects a project directory listing of recent issues.
+
+#### Bulk Sync (Admin Console → Jira Integration tab)
+- **Live Jira Issues**: View real-time ticket status from Jira using a JQL filter
+- **RAG Vector Ingestion Sync**: Ingest Jira tickets into the vector store for semantic search
+  - Specify a JQL query (e.g. `project = "TS0"`)
+  - Each matching ticket is converted to a structured markdown document, uploaded, chunked, and embedded
+  - Console output shows progress and any errors
+  - After sync, users can query against Jira ticket content just like any other document
+
+#### Jira Configuration
+Set the following environment variables in `.env` to enable Jira integration:
+
+```bash
+# Jira Integration (optional)
+JIRA_URL=https://your-instance.atlassian.net     # Jira base URL
+JIRA_AUTH_METHOD=basic                            # "basic" or "bearer"
+JIRA_EMAIL=your-email@company.com                 # For basic auth
+JIRA_API_TOKEN=your-jira-api-token                # API token
+JIRA_SYNC_JQL=project = 'RAG'                     # Default JQL for sync
+```
+
+Supports Jira Cloud (API v3) and Jira Server/Data Center (API v2) with automatic fallback.
 
 ---
 
@@ -253,7 +338,7 @@ uvicorn main:app --host 0.0.0.0 --port 8010 --reload
 ## API Reference
 
 ### POST /api/v1/query
-Submit a question to the knowledge base.
+Submit a question to the knowledge base. If Jira is configured, issue keys in the query are resolved in real-time.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/query \
@@ -277,7 +362,7 @@ curl -X POST http://localhost:8000/api/v1/query \
 ```
 
 ### POST /api/v1/upload
-Upload a PDF or DOCX document.
+Upload a PDF or DOCX document (admin only).
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/upload \
@@ -285,6 +370,16 @@ curl -X POST http://localhost:8000/api/v1/upload \
   -F "file=@document.pdf" \
   -F "department=engineering" \
   -F "access_level=basic"
+```
+
+### POST /api/v1/ingest-url
+Ingest a web page by URL — fetches, cleans HTML, chunks, and embeds (admin only).
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ingest-url \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article", "department": "engineering", "access_level": "basic"}'
 ```
 
 ### POST /api/v1/feedback
@@ -297,8 +392,79 @@ curl -X POST http://localhost:8000/api/v1/feedback \
   -d '{"rating": 5, "comment": "Very helpful!", "query_text": "How to reset VPN?"}'
 ```
 
+### POST /api/v1/escalations
+Request human review for a query response.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/escalations \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"query_id": "uuid", "reason": "Answer seems incorrect"}'
+```
+
+### POST /api/v1/onboard-user
+Create a new user in Keycloak (admin only).
+
+```bash
+curl -X POST http://localhost:8000/api/v1/onboard-user \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "john", "email": "john@company.com", "password": "temp123", "role": "user", "first_name": "John", "last_name": "Doe"}'
+```
+
+### GET /api/v1/users
+List all users with their roles (admin only).
+
+### PUT /api/v1/users/{user_id}/password
+Update a user's password (admin only).
+
+### DELETE /api/v1/users/{user_id}
+Delete a user from the realm (admin only).
+
+### POST /api/v1/jira/sync
+Sync Jira tickets to the vector store using JQL (admin only).
+
+```bash
+curl -X POST http://localhost:8000/api/v1/jira/sync \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"jql": "project = '\''TS0'\''"}'
+```
+
+### GET /api/v1/jira/live-issues
+Fetch live Jira issues without syncing (admin only).
+
+```bash
+curl http://localhost:8000/api/v1/jira/live-issues?jql=project%20%3D%20%27TS0%27 \
+  -H "Authorization: Bearer <token>"
+```
+
+### GET /api/v1/services/health
+Aggregate real-time health status of all services (admin only).
+
+### GET /api/v1/services/{service_name}/logs
+Retrieve Docker container logs for a specific service (admin only).
+
 ### GET /api/v1/documents
 List all uploaded documents.
+
+### GET /api/v1/documents/{document_id}/download
+Download or view the original source document. For Jira-sourced documents, redirects to the Jira issue URL.
+
+### GET /api/v1/logs
+Expose audit logs to admins.
+
+### GET /api/v1/logs/stats
+Expose RAG pipeline metrics (total queries, avg confidence, avg latency, etc.) to admins.
+
+### GET /api/v1/feedback/stats
+Expose feedback analytics (avg rating, satisfaction trend, worst queries) to admins.
+
+### GET /api/v1/escalations
+List escalated queries for admins.
+
+### POST /api/v1/escalations/{query_id}/resolve
+Resolve an escalated query (admin only).
 
 ### GET /health
 API Gateway health check.
@@ -317,28 +483,28 @@ User Query
 │  Qdrant +    │     │  Grounded    │     │  Inline refs │
 │  RBAC filter │     │  generation  │     │  [1],[2]...  │
 └──────────────┘     └──────────────┘     └──────────────┘
-                                                │
-                           ┌────────────────────┤
-                           ▼                    ▼
-                    ┌──────────────┐     ┌──────────────┐
-                    │ Explanation  │     │ Confidence   │
-                    │ Engine       │     │ Service      │
-                    │ Why this     │     │ HIGH/MED/LOW │
-                    │ answer?      │     │ Multi-signal │
-                    └──────────────┘     └──────────────┘
-                                                │
-                                                ▼
-                                         ┌──────────────┐
-                                         │ Audit Service│
-                                         │ Query log    │
-                                         │ Latency      │
-                                         └──────────────┘
+       ▲                                        │
+       │ (if Jira             ┌─────────────────┤
+       │  configured)         ▼                  ▼
+  ┌────┴──────┐       ┌──────────────┐     ┌──────────────┐
+  │ Jira API  │       │ Explanation  │     │ Confidence   │
+  │ Real-time │       │ Engine       │     │ Service      │
+  │ issue     │       │ Why this     │     │ HIGH/MED/LOW │
+  │ injection │       │ answer?      │     │ Multi-signal │
+  └───────────┘       └──────────────┘     └──────────────┘
+                                                  │
+                                                  ▼
+                                           ┌──────────────┐
+                                           │ Audit Service│
+                                           │ Query log    │
+                                           │ Latency      │
+                                           └──────────────┘
 ```
 
 ## Document Ingestion Flow
 
 ```
-File Upload
+File Upload / URL Ingestion / Jira Sync
     │
     ▼
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -348,6 +514,11 @@ File Upload
 │  PG metadata │     │  100 overlap │     │  → Qdrant    │
 └──────────────┘     └──────────────┘     └──────────────┘
 ```
+
+Supported knowledge sources:
+- **PDF / DOCX / TXT** — uploaded via the sidebar or API
+- **Web pages** — any public URL, fetched and cleaned automatically
+- **Jira tickets** — bulk-synced via JQL or injected in real-time during queries
 
 ---
 
@@ -381,6 +552,12 @@ docker compose logs -f
 docker compose restart api-gateway
 ```
 
+### Jira integration not working
+Ensure `.env` contains valid `JIRA_URL`, `JIRA_EMAIL`, and `JIRA_API_TOKEN`. Verify connectivity:
+```bash
+docker compose logs api-gateway | grep -i jira
+```
+
 ---
 
 ## Project Structure
@@ -408,23 +585,24 @@ myrepo/
 │       ├── components/
 │       │   ├── LoginPage.tsx       # Keycloak SSO login
 │       │   ├── ChatInterface.tsx   # Chat UI
-│       │   ├── ChatMessage.tsx     # Message with citations/confidence
-│       │   ├── DocumentUpload.tsx  # File upload widget
-│       │   ├── DocumentList.tsx    # Document listing
+│       │   ├── ChatMessage.tsx     # Message with citations/confidence/escalation
+│       │   ├── AdminDashboard.tsx  # Admin console (metrics, services, logs, users, Jira)
+│       │   ├── DocumentUpload.tsx  # File upload + URL ingestion widget
+│       │   ├── DocumentList.tsx    # Document listing with type icons
 │       │   ├── SourcePanel.tsx     # Citation sources display
 │       │   ├── ExplanationPanel.tsx# Reasoning trail
 │       │   ├── ConfidenceIndicator.tsx # Confidence bars
 │       │   └── FeedbackWidget.tsx  # Rating + comments
 │       ├── services/
-│       │   ├── api.ts          # API client
+│       │   ├── api.ts          # API client (query, upload, URL ingest, Jira, users)
 │       │   └── keycloak.ts     # Keycloak config
 │       ├── types/
 │       │   └── index.ts        # TypeScript types
 │       └── theme/
 │           └── theme.ts        # Dark MUI theme
 └── services/
-    ├── api-gateway/            # JWT auth + request routing
-    ├── document-service/       # MinIO upload + PG metadata
+    ├── api-gateway/            # JWT auth, request routing, Jira integration, user management
+    ├── document-service/       # MinIO upload, URL ingestion, PG metadata
     ├── chunking-service/       # Text extraction + chunking
     ├── embedding-service/      # BGE embeddings → Qdrant
     ├── retrieval-service/      # Semantic search + RBAC
@@ -433,7 +611,7 @@ myrepo/
     ├── explanation-service/    # Reasoning explanations
     ├── confidence-service/     # Multi-signal scoring
     ├── feedback-service/       # User feedback storage
-    └── audit-service/          # Query logging + stats
+    └── audit-service/          # Query logging + stats + escalations
 ```
 
 ---
