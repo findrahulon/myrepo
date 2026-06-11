@@ -61,8 +61,10 @@ import {
   deleteUser,
   syncJiraTickets,
   getJiraLiveIssues,
+  getConfluenceLivePages,
+  syncConfluencePages,
 } from '../services/api';
-import type { User, JiraLiveIssue } from '../services/api';
+import type { User, JiraLiveIssue, ConfluenceLivePage } from '../services/api';
 import keycloak from '../services/keycloak';
 import type {
   AuditLog,
@@ -1157,6 +1159,124 @@ const JiraIntegrationTab: React.FC = () => {
 };
 
 
+const ConfluenceIntegrationTab: React.FC = () => {
+  // Live page viewer states
+  const [livePages, setLivePages] = useState<ConfluenceLivePage[]>([]);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [filterSpace, setFilterSpace] = useState('');
+
+  const fetchLivePages = async () => {
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const pages = await getConfluenceLivePages(filterSpace || undefined);
+      setLivePages(pages);
+    } catch (err) {
+      setLiveError(err instanceof Error ? err.message : 'Failed to fetch live Confluence pages');
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLivePages();
+  }, []);
+
+  return (
+    <Box sx={{ p: 3, maxWidth: 900, mx: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+      
+      {/* CARD 1: Live Page Viewer */}
+      <Paper sx={{ p: 4, borderRadius: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
+              Live Confluence Pages
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Real-time pages list directly from Confluence.
+            </Typography>
+          </Box>
+          <Button
+            size="small"
+            startIcon={liveLoading ? <CircularProgress size={12} /> : <Refresh />}
+            variant="outlined"
+            onClick={fetchLivePages}
+            disabled={liveLoading}
+          >
+            Refresh
+          </Button>
+        </Box>
+
+        <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start' }}>
+          <TextField
+            label="Space Key Filter (Optional)"
+            placeholder="e.g. Policies"
+            value={filterSpace}
+            onChange={(e) => setFilterSpace(e.target.value)}
+            disabled={liveLoading}
+            size="small"
+            sx={{ flex: 1 }}
+          />
+          <Button
+            variant="contained"
+            onClick={fetchLivePages}
+            disabled={liveLoading}
+            sx={{ height: 40 }}
+          >
+            Query
+          </Button>
+        </Box>
+
+        {liveError && <Alert severity="error" sx={{ mb: 2 }}>{liveError}</Alert>}
+
+        {liveLoading && livePages.length === 0 ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : livePages.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+            No live pages found. Try adjusting space filter.
+          </Typography>
+        ) : (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 700 }}>Page ID</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Title</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Space</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Created By</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Created Date</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {livePages.map((page) => (
+                <TableRow key={page.id} hover>
+                  <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{page.id}</TableCell>
+                  <TableCell>{page.title}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={page.space_key}
+                      size="small"
+                      color="secondary"
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell>{page.created_by}</TableCell>
+                  <TableCell sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                    {page.created_date !== 'Unknown' ? new Date(page.created_date).toLocaleDateString() : 'Unknown'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Paper>
+    </Box>
+  );
+};
+
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────
 const AdminDashboard: React.FC = () => {
   const [tab, setTab] = useState(0);
@@ -1220,6 +1340,7 @@ const AdminDashboard: React.FC = () => {
           <Tab label="Onboard User" />
           <Tab label="Manage Users" />
           <Tab label="Jira Integration" />
+          <Tab label="Confluence Integration" />
         </Tabs>
       </Box>
 
@@ -1377,6 +1498,9 @@ const AdminDashboard: React.FC = () => {
 
       {/* Jira Integration tab */}
       {tab === 5 && <Box sx={{ flex: 1, overflow: 'auto' }}><JiraIntegrationTab /></Box>}
+
+      {/* Confluence Integration tab */}
+      {tab === 6 && <Box sx={{ flex: 1, overflow: 'auto' }}><ConfluenceIntegrationTab /></Box>}
     </Box>
   );
 };

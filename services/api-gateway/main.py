@@ -46,6 +46,47 @@ JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 JIRA_SYNC_JQL = os.getenv("JIRA_SYNC_JQL", "project = 'RAG'")
 
+# Confluence Integration settings
+CONFLUENCE_URL = os.getenv("CONFLUENCE_URL")
+if not CONFLUENCE_URL and JIRA_URL:
+    CONFLUENCE_URL = JIRA_URL.rstrip('/') + '/wiki'
+CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL") or JIRA_EMAIL
+CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN") or JIRA_API_TOKEN
+CONFLUENCE_SPACE_KEY = os.getenv("CONFLUENCE_SPACE_KEY")
+
+
+def get_confluence_headers() -> dict:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    email = CONFLUENCE_EMAIL
+    token = CONFLUENCE_API_TOKEN
+    if not token:
+        return headers
+    
+    cred = f"{email}:{token}"
+    encoded = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
+    headers["Authorization"] = f"Basic {encoded}"
+    return headers
+
+
+def clean_confluence_html(html: str) -> str:
+    if not html:
+        return ""
+    # Strip macro elements
+    html = re.sub(r'<ac:structured-macro[^>]*>.*?</ac:structured-macro>', '', html, flags=re.DOTALL)
+    html = re.sub(r'<ac:[^>]*>.*?</ac:[^>]*>', '', html, flags=re.DOTALL)
+    html = re.sub(r'<ac:[^>]*/>', '', html)
+    # Strip HTML tags
+    html = re.sub(r'<[^>]+>', ' ', html)
+    # Clean whitespace
+    html = re.sub(r'\s+', ' ', html)
+    # Decode common HTML entities
+    html = html.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&nbsp;", " ")
+    return html.strip()
+
+
 
 def get_jira_headers() -> dict:
     headers = {
@@ -199,6 +240,11 @@ class UpdatePasswordRequest(BaseModel):
 
 class JiraSyncRequest(BaseModel):
     jql: Optional[str] = None
+
+
+class ConfluenceSyncRequest(BaseModel):
+    space: Optional[str] = None
+
 
 
 def require_admin(token_payload: dict) -> dict:
@@ -444,7 +490,88 @@ Comments:
                     except Exception as e:
                         print(f"Jira real-time project list lookup failed: {str(e)}")
 
-        chunks = jira_chunks + chunks
+        # Real-time Confluence page lookup
+        confluence_chunks = []
+        if CONFLUENCE_URL:
+            query_lower = req.query.lower()
+            confluence_keywords = ["confluence", "wiki", "page", "article", "documentation", "policy", "policies"]
+            if any(kw in query_lower for kw in confluence_keywords):
+                try:
+                    clean_confluence_url = CONFLUENCE_URL.rstrip('/')
+                    confluence_headers = get_confluence_headers()
+                    
+                    # Clean query for CQL and extract search terms
+                    stop_words = {
+                        "what", "is", "the", "according", "to", "confluence", "wiki", "page", "article", "documentation", "policy", "policies",
+                        "can", "you", "tell", "please", "who", "where", "how", "why", "a", "an", "of", "in",
+                        "on", "at", "for", "with", "by", "from", "up", "about", "into", "over", "after", "here",
+                        "there", "when", "then", "their", "them", "these", "those", "this", "that", "and", "or",
+                        "but", "if", "any", "all", "some", "any", "no", "not"
+                    }
+                    cleaned = re.sub(r'[^\w\s]', ' ', req.query.lower())
+                    words = cleaned.split()
+                    terms = [w for w in words if w not in stop_words]
+                    
+                    if terms:
+                        cql = f'text ~ "{" ".join(terms)}"'
+                    else:
+                        cql = f'text ~ "{req.query.replace('"', '').replace('\\', '')}"'
+                    
+                    if CONFLUENCE_SPACE_KEY:
+                        cql = f'space = "{CONFLUENCE_SPACE_KEY}" and ({cql})'
+                    
+                    search_url = f"{clean_confluence_url}/rest/api/content/search"
+                    params = {
+                        "cql": cql,
+                        "limit": 3,
+                        "expand": "space,body.storage"
+                    }
+                    resp = await client.get(search_url, headers=confluence_headers, params=params)
+                    results = []
+                    if resp.status_code == 200:
+                        results = resp.json().get("results", [])
+                        
+                    # Fallback to OR CQL if AND returned 0 results
+                    if not results and terms:
+                        cql_or = " OR ".join([f'text ~ "{t}"' for t in terms])
+                        if CONFLUENCE_SPACE_KEY:
+                            cql_or = f'space = "{CONFLUENCE_SPACE_KEY}" and ({cql_or})'
+                        params["cql"] = cql_or
+                        resp = await client.get(search_url, headers=confluence_headers, params=params)
+                        if resp.status_code == 200:
+                            results = resp.json().get("results", [])
+
+                    for r in results:
+                        page_id = r.get("id")
+                        title = r.get("title", "No Title")
+                        space_info = r.get("space", {})
+                        space_key_val = space_info.get("key", "Unknown")
+                        space_name = space_info.get("name", "Unknown")
+                        
+                        body_storage = r.get("body", {}).get("storage", {}).get("value", "")
+                        cleaned_body = clean_confluence_html(body_storage)
+                        
+                        page_md = f"""[LIVE CONFLUENCE DATA] Page: {title}
+Space: {space_name} ({space_key_val})
+ID: {page_id}
+
+Content:
+{cleaned_body}"""
+                        
+                        confluence_chunks.append({
+                            "id": f"confluence-{page_id}",
+                            "chunk_text": page_md,
+                            "document_id": f"confluence-{page_id}",
+                            "filename": f"confluence-{page_id}.txt",
+                            "chunk_index": 0,
+                            "page_number": 1,
+                            "section": "Confluence Real-Time Status",
+                            "relevance_score": 1.0
+                        })
+                except Exception as e:
+                    print(f"Confluence real-time lookup failed: {str(e)}")
+
+        chunks = jira_chunks + confluence_chunks + chunks
 
         if not chunks:
             latency_ms = int((time.time() - start) * 1000)
@@ -808,6 +935,17 @@ async def download_document(document_id: str, token_payload: dict = Depends(vali
             headers={"X-Source-URL": jira_issue_url}
         )
 
+    if document_id.startswith("confluence-") and CONFLUENCE_URL:
+        # For real-time lookup citations
+        page_id = document_id.replace("confluence-", "")
+        clean_confluence_url = CONFLUENCE_URL.rstrip('/')
+        confluence_page_url = f"{clean_confluence_url}/pages/viewpage.action?pageId={page_id}"
+        return Response(
+            content=f"Redirecting to Confluence page: {confluence_page_url}",
+            status_code=200,
+            headers={"X-Source-URL": confluence_page_url}
+        )
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(f"{DOCUMENT_SERVICE}/documents/{document_id}/download")
 
@@ -836,6 +974,19 @@ async def download_document(document_id: str, token_payload: dict = Depends(vali
                 content=f"Redirecting to Jira issue: {jira_issue_url}",
                 status_code=200,
                 headers={"X-Source-URL": jira_issue_url}
+            )
+
+    # For synced database citations with confluence-*.txt filenames
+    if "confluence-" in content_disposition and CONFLUENCE_URL:
+        match = re.search(r'confluence-([0-9]+)', content_disposition)
+        if match:
+            page_id = match.group(1)
+            clean_confluence_url = CONFLUENCE_URL.rstrip('/')
+            confluence_page_url = f"{clean_confluence_url}/pages/viewpage.action?pageId={page_id}"
+            return Response(
+                content=f"Redirecting to Confluence page: {confluence_page_url}",
+                status_code=200,
+                headers={"X-Source-URL": confluence_page_url}
             )
 
     source_url = resp.headers.get("x-source-url")
@@ -1425,4 +1576,80 @@ async def get_jira_live_issues(
             })
 
         return live_issues
+
+
+@app.get("/api/v1/confluence/live-pages")
+async def get_confluence_live_pages(
+    space: Optional[str] = None,
+    token_payload: dict = Depends(validate_token),
+):
+    """Fetch pages from Confluence in real-time without syncing (Admin only)."""
+    user = extract_user_info(token_payload)
+    if user["access_level"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view live Confluence pages")
+
+    if not CONFLUENCE_URL:
+        raise HTTPException(status_code=400, detail="Confluence integration is not configured")
+
+    clean_confluence_url = CONFLUENCE_URL.rstrip('/')
+    headers = get_confluence_headers()
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            url = f"{clean_confluence_url}/rest/api/content"
+            params = {
+                "type": "page",
+                "limit": 50,
+                "expand": "space,history"
+            }
+            space_key = space if space else CONFLUENCE_SPACE_KEY
+            if space_key:
+                params["spaceKey"] = space_key
+
+            resp = await client.get(url, headers=headers, params=params)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Confluence API search failed: {resp.status_code} - {resp.text}")
+
+            data = resp.json()
+            results = data.get("results", [])
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(status_code=500, detail=f"Error connecting to Confluence: {str(e)}")
+
+        live_pages = []
+        for page in results:
+            page_id = page.get("id")
+            title = page.get("title", "No Title")
+            space_info = page.get("space", {})
+            space_name = space_info.get("name", "Unknown")
+            space_key_val = space_info.get("key", "Unknown")
+            
+            history = page.get("history", {})
+            created_date = history.get("createdDate", "Unknown")
+            created_by = history.get("createdBy", {}).get("displayName", "Unknown")
+
+            live_pages.append({
+                "id": page_id,
+                "title": title,
+                "space_key": space_key_val,
+                "space_name": space_name,
+                "created_by": created_by,
+                "created_date": created_date
+            })
+
+        return live_pages
+
+
+@app.post("/api/v1/confluence/sync")
+async def sync_confluence_pages(
+    req: Optional[ConfluenceSyncRequest] = None,
+    token_payload: dict = Depends(validate_token),
+):
+    """Bulk sync is disabled for Confluence as it is configured strictly for real-time querying."""
+    raise HTTPException(
+        status_code=400,
+        detail="Confluence bulk sync to database/vector store is disabled. Confluence integration is configured to query live data in real-time only."
+    )
+
 
