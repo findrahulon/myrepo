@@ -162,13 +162,9 @@ services:
     command:
       - -c
       - |
-        echo "Ensuring model 'phi' is available..."
-        ollama pull phi
-        echo "Model 'phi' is ready."
-        echo "Removing large models not suited for CPU inference..."
-        ollama rm llama3.1:8b 2>/dev/null || true
-        ollama rm qwen3:8b 2>/dev/null || true
-        echo "Cleanup complete."
+        echo "Ensuring model 'llama3.1:8b' is available..."
+        ollama pull llama3.1:8b
+        echo "Model 'llama3.1:8b' is ready."
     environment:
       OLLAMA_HOST: http://ollama:11434
     networks:
@@ -268,8 +264,8 @@ services:
       - "8005:8005"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      PRIMARY_MODEL: phi
-      FALLBACK_MODEL: phi
+      PRIMARY_MODEL: llama3.1:8b
+      FALLBACK_MODEL: llama3.1:8b
     depends_on:
       ollama-init:
         condition: service_completed_successfully

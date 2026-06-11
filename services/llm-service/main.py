@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "llama3.1:8b")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "qwen3:8b")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "llama3.1:8b")
 
 SYSTEM_PROMPT = """You are RAGnarok, an enterprise knowledge assistant. Your task is to provide
 accurate, well-structured answers based ONLY on the provided context documents.
@@ -166,7 +166,7 @@ async def generate(req: GenerateRequest):
     return {
         "answer": "I apologize, but I'm unable to generate an answer at this time. "
                   "The LLM service is temporarily unavailable. Please ensure Ollama is "
-                  "running and a model (phi, orca-mini, llama2) is pulled.",
+                  "running and the model llama3.1:8b is pulled.",
         "model_used": "none",
         "error": "Both primary and fallback models unavailable",
     }
