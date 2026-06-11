@@ -35,7 +35,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 export async function sendQuery(query: string): Promise<QueryResponse> {
   const headers = await getHeaders();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  const timeoutId = setTimeout(() => controller.abort(), 600_000);
   try {
     const response = await fetch(`${API_BASE}/query`, {
       method: 'POST',

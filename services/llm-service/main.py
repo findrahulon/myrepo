@@ -90,8 +90,8 @@ async def generate(req: GenerateRequest):
     
     logger.info(f"Attempting to connect to Ollama at {OLLAMA_BASE_URL}")
     
-    # Increased timeout to 300s (5 min) for swapping on 8GB RAM
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    # 600s timeout for llama3.1:8b on CPU (prefill + generation can take several minutes)
+    async with httpx.AsyncClient(timeout=600.0) as client:
         # Try primary model first
         try:
             logger.info(f"Trying primary model: {PRIMARY_MODEL}")
@@ -105,11 +105,9 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 512,
+                        "num_predict": 256,
                         "num_ctx": NUM_CTX,
-                        "num_batch": 32,
-                        "num_gpu": 0,
-                        "num_thread": 2,
+                        "num_batch": 512,
                     },
                 },
             )
@@ -140,11 +138,9 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 512,
+                        "num_predict": 256,
                         "num_ctx": NUM_CTX,
-                        "num_batch": 32,
-                        "num_gpu": 0,
-                        "num_thread": 2,
+                        "num_batch": 512,
                     },
                 },
             )
