@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # ─── Infrastructure ────────────────────────────────────────
   postgres:
@@ -150,7 +148,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin123
       MINIO_BUCKET: ragnarok-documents
-      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+      DATABASE_URL: postgresql://ragnarok:[REDACTED]@postgres:5432/ragnarok
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,7 +162,7 @@ services:
     ports:
       - "8002:8002"
     environment:
-      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+      DATABASE_URL: postgresql://ragnarok:[REDACTED]@postgres:5432/ragnarok
     depends_on:
       postgres:
         condition: service_healthy
@@ -200,7 +198,7 @@ services:
   llm-service:
     build: ./services/llm-service
     ports:
-      - "8005:8005"
+      - "8015:8005"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       PRIMARY_MODEL: phi
@@ -236,7 +234,7 @@ services:
     ports:
       - "8009:8009"
     environment:
-      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+      DATABASE_URL: postgresql://ragnarok:[REDACTED]@postgres:5432/ragnarok
     depends_on:
       postgres:
         condition: service_healthy
@@ -248,7 +246,7 @@ services:
     ports:
       - "8010:8010"
     environment:
-      DATABASE_URL: postgresql://ragnarok:ragnarok_secret@postgres:5432/ragnarok
+      DATABASE_URL: postgresql://ragnarok:[REDACTED]@postgres:5432/ragnarok
     depends_on:
       postgres:
         condition: service_healthy
