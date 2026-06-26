@@ -34,10 +34,19 @@ qdrant: Optional[QdrantClient] = None
 
 @app.on_event("startup")
 async def startup():
-    global model, qdrant
-    logger.info(f"Loading embedding model: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
+    global qdrant
+    logger.info("Initializing Qdrant client")
     qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+    logger.info("Qdrant client initialized; model will be lazy-loaded on first request")
+
+
+async def ensure_model_loaded():
+    global model
+    if model is None:
+        logger.info(f"Lazy-loading embedding model: {MODEL_NAME}")
+        model = SentenceTransformer(MODEL_NAME)
+        logger.info("Model loaded successfully")
+    return model
 
 
 class RetrieveRequest(BaseModel):
@@ -55,6 +64,9 @@ async def health():
 @app.post("/retrieve")
 async def retrieve(req: RetrieveRequest):
     """Embed query and search Qdrant for relevant chunks."""
+    # Lazy-load model on first request
+    await ensure_model_loaded()
+    
     # Generate query embedding
     query_embedding = model.encode(req.query, normalize_embeddings=True).tolist()
 
