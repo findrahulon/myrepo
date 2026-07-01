@@ -1,0 +1,39 @@
+import { type ReactNode } from 'react'
+
+interface CardProps {
+  children: ReactNode
+  className?: string
+  padding?: boolean
+}
+
+export function Card({ children, className = '', padding = true }: CardProps) {
+  return (
+    <div
+      className={`bg-white rounded-xl border border-[var(--color-border)] shadow-sm ${
+        padding ? 'p-6' : ''
+      } ${className}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+interface CardHeaderProps {
+  title: string
+  subtitle?: string
+  action?: ReactNode
+}
+
+export function CardHeader({ title, subtitle, action }: CardHeaderProps) {
+  return (
+    <div className="flex items-start justify-between mb-4">
+      <div>
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">{title}</h3>
+        {subtitle && (
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{subtitle}</p>
+        )}
+      </div>
+      {action && <div>{action}</div>}
+    </div>
+  )
+}
