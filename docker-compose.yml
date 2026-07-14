@@ -201,8 +201,8 @@
       - "8015:8005"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      PRIMARY_MODEL: neural-chat
-      FALLBACK_MODEL: neural-chat
+      PRIMARY_MODEL: tinyllama
+      FALLBACK_MODEL: tinyllama
     depends_on:
       - ollama
     networks:
@@ -272,6 +272,7 @@ volumes:
 networks:
   ragnarok:
     driver: bridge
+
 
 
 

@@ -1,4 +1,4 @@
-"""RAGnarok LLM Service — prompt building and Ollama integration for grounded answer generation."""
+﻿"""RAGnarok LLM Service â€” prompt building and Ollama integration for grounded answer generation."""
 
 import os
 import logging
@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "neural-chat")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "neural-chat")
+PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "tinyllama")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "tinyllama")
 
 SYSTEM_PROMPT = """You are RAGnarok, an enterprise knowledge assistant. Your task is to provide
 accurate, well-structured answers based ONLY on the provided context documents.
@@ -80,9 +80,9 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 256,
-                        "num_ctx": 1024,
-                        "num_batch": 4,
+                        "num_predict": 128,
+                        "num_ctx": 512,
+                        "num_batch": 2,
                         "num_gpu": 0,
                         "num_thread": 4,
                     },
@@ -115,9 +115,9 @@ async def generate(req: GenerateRequest):
                     "options": {
                         "temperature": 0.3,
                         "top_p": 0.9,
-                        "num_predict": 256,
-                        "num_ctx": 1024,
-                        "num_batch": 4,
+                        "num_predict": 128,
+                        "num_ctx": 512,
+                        "num_batch": 2,
                         "num_gpu": 0,
                         "num_thread": 4,
                     },
@@ -145,3 +145,4 @@ async def generate(req: GenerateRequest):
         "model_used": "none",
         "error": "Both primary and fallback models unavailable",
     }
+
