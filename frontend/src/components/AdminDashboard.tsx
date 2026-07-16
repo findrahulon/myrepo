@@ -367,7 +367,6 @@ const SERVICES_LIST = [
   { id: 'postgres', name: 'Postgres (db)' },
   { id: 'minio', name: 'MinIO (storage)' },
   { id: 'qdrant', name: 'Qdrant (vector DB)' },
-  { id: 'ollama', name: 'Ollama (LLM backend)' },
   { id: 'frontend', name: 'Frontend (web)' }
 ];
 

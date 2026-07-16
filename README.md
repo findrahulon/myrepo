@@ -2,7 +2,7 @@
 
 A fully working Proof of Concept (POC) demonstrating a RAG-based enterprise knowledge assistant with **inline citations**, **confidence scoring**, **explainability**, **RBAC**, **feedback collection**, and **query audit logging**.
 
-Built with 100% free/open-source technologies. Runs entirely locally using Docker Compose.
+Runs locally with Docker Compose (except LLM inference, which uses OpenAI API).
 
 ---
 
@@ -16,7 +16,7 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
 └─────────────┘     └──────────────┘     └─────────────────┘
        │                    │                      │
        │              ┌─────┴──────┐          ┌────┴────┐
-       │              │  Keycloak  │          │ Ollama  │
+       │              │  Keycloak  │          │ OpenAI  │
        │              │   (Auth)   │          │ (LLM)   │
        │              └────────────┘          └─────────┘
        │                                          │
@@ -26,7 +26,7 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
   └─────────────────────────────────────────┘     │
 ```
 
-### Components (17 Docker Containers)
+### Components (16 Docker Containers)
 
 | Container | Port | Technology | Purpose |
 |-----------|------|-----------|---------|
@@ -36,7 +36,7 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
 | `chunking-service` | 8002 | FastAPI, tiktoken | 500-token chunks, 100-token overlap |
 | `embedding-service` | 8003 | FastAPI, SentenceTransformers | BGE embeddings → Qdrant |
 | `retrieval-service` | 8004 | FastAPI, Qdrant | Semantic search with RBAC filtering |
-| `llm-service` | 8005 | FastAPI, Ollama | Grounded answer generation |
+| `llm-service` | 8005 | FastAPI, OpenAI API | Grounded answer generation |
 | `citation-service` | 8006 | FastAPI | Inline citation extraction |
 | `explanation-service` | 8007 | FastAPI | "Why this answer?" reasoning |
 | `confidence-service` | 8008 | FastAPI | HIGH/MEDIUM/LOW scoring |
@@ -46,7 +46,6 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
 | `minio` | 9000/9001 | MinIO | Document object storage |
 | `qdrant` | 6333 | Qdrant | Vector database |
 | `keycloak` | 8080 | Keycloak 24 | Authentication and RBAC |
-| `ollama` | 11434 | Ollama | Local LLM inference |
 
 ---
 
@@ -61,15 +60,16 @@ Built with 100% free/open-source technologies. Runs entirely locally using Docke
 | Object Storage | MinIO |
 | Embeddings | BAAI/bge-small-en-v1.5 via SentenceTransformers |
 | Vector DB | Qdrant Community Edition |
-| LLM | Ollama with llama3.1:8b (fallback qwen3:8b) |
+| LLM | OpenAI Chat Completions API (configurable primary/fallback model) |
 
 ---
 
 ## Prerequisites
 
 - **Docker** (v20.10+) and **Docker Compose** (v2.0+)
-- **16 GB RAM** minimum (LLM model requires ~6 GB)
-- **20 GB free disk** space (for models and container images)
+- **OpenAI API key** with access to your selected model
+- **8 GB RAM** minimum for local services
+- **10 GB free disk** space (for container images and data)
 
 ---
 
@@ -83,16 +83,14 @@ cd myrepo
 docker compose up -d --build
 ```
 
-### 2. Pull an LLM Model
+### 2. Configure OpenAI Access
 
-After Ollama starts, pull a model (choose one):
+Create a `.env` file from `.env.example` and set:
 
 ```bash
-# Primary model (recommended)
-docker compose exec ollama ollama pull llama3.1:8b
-
-# OR fallback model
-docker compose exec ollama ollama pull qwen3:8b
+OPENAI_API_KEY=your-openai-api-key
+PRIMARY_MODEL=gpt-4o-mini
+FALLBACK_MODEL=gpt-4o-mini
 ```
 
 ### 3. Access the Application
@@ -129,7 +127,7 @@ The Keycloak realm is pre-configured with two users:
 
 ### Ask Questions
 1. Type a question in the chat input
-2. The system retrieves relevant chunks, generates a grounded answer via Ollama, and returns:
+2. The system retrieves relevant chunks, generates a grounded answer via OpenAI, and returns:
    - **Answer** with inline `[1]`, `[2]` citations
    - **Confidence score** (HIGH / MEDIUM / LOW) with breakdown
    - **Sources panel** showing referenced document chunks
@@ -202,7 +200,7 @@ uvicorn main:app --host 0.0.0.0 --port 8004 --reload
 ```bash
 cd services/llm-service
 pip install -r requirements.txt
-# Requires: Ollama on localhost:11434 with a model pulled
+# Requires: OPENAI_API_KEY and model settings in environment
 uvicorn main:app --host 0.0.0.0 --port 8005 --reload
 ```
 
@@ -272,7 +270,7 @@ curl -X POST http://localhost:8000/api/v1/query \
     "confidence": {"overall": 0.87, "level": "HIGH", "breakdown": {...}},
     "explanation": {"summary": "...", "reasoning_steps": [...]}
   },
-  "meta": {"request_id": "uuid", "latency_ms": 2340, "model_used": "llama3.1:8b"}
+  "meta": {"request_id": "uuid", "latency_ms": 2340, "model_used": "gpt-4o-mini"}
 }
 ```
 
@@ -313,7 +311,7 @@ User Query
     ▼
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Retrieval   │────▶│  LLM Service │────▶│   Citation   │
-│  Service     │     │  (Ollama)    │     │   Engine     │
+│  Service     │     │  (OpenAI)    │     │   Engine     │
 │  Qdrant +    │     │  Grounded    │     │  Inline refs │
 │  RBAC filter │     │  generation  │     │  [1],[2]...  │
 └──────────────┘     └──────────────┘     └──────────────┘
@@ -359,11 +357,8 @@ Keycloak takes 60-90 seconds to start. Check status:
 docker compose logs keycloak
 ```
 
-### Ollama model not found
-Pull the model after Ollama starts:
-```bash
-docker compose exec ollama ollama pull llama3.1:8b
-```
+### OpenAI authentication error
+Confirm `OPENAI_API_KEY` is set and valid in your `.env` file, then restart `llm-service`.
 
 ### Embedding service slow on first start
 The BGE model (~130 MB) is downloaded on first startup. Subsequent starts use the cached model.
@@ -428,7 +423,7 @@ myrepo/
     ├── chunking-service/       # Text extraction + chunking
     ├── embedding-service/      # BGE embeddings → Qdrant
     ├── retrieval-service/      # Semantic search + RBAC
-    ├── llm-service/            # Ollama prompt + generation
+    ├── llm-service/            # OpenAI prompt + generation
     ├── citation-service/       # Inline citations
     ├── explanation-service/    # Reasoning explanations
     ├── confidence-service/     # Multi-signal scoring

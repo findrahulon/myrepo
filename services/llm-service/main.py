@@ -1,4 +1,4 @@
-﻿"""RAGnarok LLM Service â€” prompt building and Ollama integration for grounded answer generation."""
+"""RAGnarok LLM Service - prompt building and OpenAI integration for grounded answer generation."""
 
 import os
 import logging
@@ -11,9 +11,15 @@ app = FastAPI(title="RAGnarok LLM Service", version="1.0.0")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "tinyllama")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "tinyllama")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+OPENAI_PROJECT = os.getenv("OPENAI_PROJECT")
+OPENAI_ORG = os.getenv("OPENAI_ORG")
+PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "gpt-4o-mini")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "256"))
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.3"))
 
 SYSTEM_PROMPT = """You are RAGnarok, an enterprise knowledge assistant. Your task is to provide
 accurate, well-structured answers based ONLY on the provided context documents.
@@ -53,96 +59,104 @@ class GenerateRequest(BaseModel):
     chunks: list[dict]
 
 
+def openai_headers() -> dict:
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    if OPENAI_PROJECT:
+        headers["OpenAI-Project"] = OPENAI_PROJECT
+    if OPENAI_ORG:
+        headers["OpenAI-Organization"] = OPENAI_ORG
+    return headers
+
+
+def extract_answer(data: dict) -> str:
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    return str(content).strip()
+
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "llm-service"}
+    return {
+        "status": "healthy",
+        "service": "llm-service",
+        "provider": "openai",
+        "configured": bool(OPENAI_API_KEY),
+    }
 
 
 @app.post("/generate")
 async def generate(req: GenerateRequest):
-    """Generate an answer using Ollama with the provided context chunks."""
+    """Generate an answer using OpenAI with the provided context chunks."""
     prompt = build_prompt(req.query, req.chunks)
-    
-    logger.info(f"Attempting to connect to Ollama at {OLLAMA_BASE_URL}")
-    
-    # Increased timeout to 600s (10 min) for slow CPU-based inference
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        # Try primary model first
-        try:
-            logger.info(f"Trying primary model: {PRIMARY_MODEL}")
-            resp = await client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": PRIMARY_MODEL,
-                    "prompt": prompt,
-                    "system": SYSTEM_PROMPT,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "top_p": 0.9,
-                        "num_predict": 128,
-                        "num_ctx": 512,
-                        "num_batch": 2,
-                        "num_gpu": 0,
-                        "num_thread": 4,
-                    },
-                },
-            )
-            logger.info(f"Primary model response status: {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                return {
-                    "answer": data.get("response", ""),
-                    "model_used": PRIMARY_MODEL,
-                    "eval_count": data.get("eval_count", 0),
-                    "eval_duration": data.get("eval_duration", 0),
-                }
-            else:
-                logger.warning(f"Primary model returned status {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.error(f"Primary model failed: {type(e).__name__}: {e}", exc_info=True)
 
-        # Try fallback model
-        try:
-            logger.info(f"Trying fallback model: {FALLBACK_MODEL}")
-            resp = await client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": FALLBACK_MODEL,
-                    "prompt": prompt,
-                    "system": SYSTEM_PROMPT,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "top_p": 0.9,
-                        "num_predict": 128,
-                        "num_ctx": 512,
-                        "num_batch": 2,
-                        "num_gpu": 0,
-                        "num_thread": 4,
-                    },
-                },
-            )
-            logger.info(f"Fallback model response status: {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                return {
-                    "answer": data.get("response", ""),
-                    "model_used": FALLBACK_MODEL,
-                    "eval_count": data.get("eval_count", 0),
-                    "eval_duration": data.get("eval_duration", 0),
-                }
-            else:
-                logger.warning(f"Fallback model returned status {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.error(f"Fallback model also failed: {type(e).__name__}: {e}", exc_info=True)
+    if not OPENAI_API_KEY:
+        return {
+            "answer": "I apologize, but OPENAI_API_KEY is not configured for llm-service.",
+            "model_used": "none",
+            "error": "OPENAI_API_KEY missing",
+        }
 
-    # If both models fail, return a helpful message
+    models_to_try = [PRIMARY_MODEL]
+    if FALLBACK_MODEL != PRIMARY_MODEL:
+        models_to_try.append(FALLBACK_MODEL)
+
+    async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT_SECONDS) as client:
+        for model in models_to_try:
+            try:
+                logger.info("Trying OpenAI model: %s", model)
+                response = await client.post(
+                    f"{OPENAI_API_BASE}/chat/completions",
+                    headers=openai_headers(),
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": OPENAI_TEMPERATURE,
+                        "max_tokens": OPENAI_MAX_TOKENS,
+                    },
+                )
+
+                if response.status_code != 200:
+                    logger.warning(
+                        "OpenAI model %s failed with %s: %s",
+                        model,
+                        response.status_code,
+                        response.text[:300],
+                    )
+                    continue
+
+                data = response.json()
+                answer = extract_answer(data)
+                if not answer:
+                    logger.warning("OpenAI model %s returned empty response", model)
+                    continue
+
+                usage = data.get("usage", {})
+                return {
+                    "answer": answer,
+                    "model_used": model,
+                    "eval_count": usage.get("total_tokens", 0),
+                    "eval_duration": 0,
+                }
+            except httpx.HTTPError as e:
+                logger.error("OpenAI request failed for model %s: %s", model, e, exc_info=True)
+            except ValueError as e:
+                logger.error("Failed to parse OpenAI response for model %s: %s", model, e, exc_info=True)
+
     return {
         "answer": "I apologize, but I'm unable to generate an answer at this time. "
-                  "The LLM service is temporarily unavailable. Please ensure Ollama is "
-                  "running and a model (llama2) is pulled.",
+                  "The OpenAI-backed LLM service is temporarily unavailable.",
         "model_used": "none",
-        "error": "Both primary and fallback models unavailable",
+        "error": "Both primary and fallback models unavailable via OpenAI",
     }
-

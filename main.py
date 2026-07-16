@@ -1015,7 +1015,7 @@ async def get_service_logs(
         "api-gateway", "document-service", "chunking-service", "embedding-service",
         "retrieval-service", "llm-service", "citation-service", "explanation-service",
         "confidence-service", "feedback-service", "audit-service", "keycloak",
-        "postgres", "minio", "qdrant", "ollama", "frontend"
+        "postgres", "minio", "qdrant", "frontend"
     ]
     if service_name not in valid_services:
         raise HTTPException(status_code=400, detail=f"Invalid service name: {service_name}")
@@ -1651,5 +1651,4 @@ async def sync_confluence_pages(
         status_code=400,
         detail="Confluence bulk sync to database/vector store is disabled. Confluence integration is configured to query live data in real-time only."
     )
-
 

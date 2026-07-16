@@ -1,5 +1,5 @@
-﻿services:
-  # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+services:
+  # Infrastructure
   postgres:
     image: postgres:16-alpine
     environment:
@@ -94,20 +94,7 @@
     networks:
       - ragnarok
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_KEEP_ALIVE: 5m
-      OLLAMA_NUM_PARALLEL: 1
-      OLLAMA_NUM_GPU: 1
-    networks:
-      - ragnarok
-
-  # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Backend Services Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  # Backend Services
   api-gateway:
     build: ./services/api-gateway
     ports:
@@ -200,11 +187,15 @@
     ports:
       - "8015:8005"
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      PRIMARY_MODEL: tinyllama
-      FALLBACK_MODEL: tinyllama
-    depends_on:
-      - ollama
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      OPENAI_PROJECT: ${OPENAI_PROJECT}
+      OPENAI_ORG: ${OPENAI_ORG}
+      PRIMARY_MODEL: ${PRIMARY_MODEL:-gpt-4o-mini}
+      FALLBACK_MODEL: ${FALLBACK_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-90}
+      OPENAI_MAX_TOKENS: ${OPENAI_MAX_TOKENS:-512}
+      OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-0.2}
     networks:
       - ragnarok
 
@@ -253,7 +244,7 @@
     networks:
       - ragnarok
 
-  # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Frontend Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  # Frontend
   frontend:
     build: ./frontend
     ports:
@@ -267,12 +258,7 @@ volumes:
   postgres_data:
   minio_data:
   qdrant_data:
-  ollama_data:
 
 networks:
   ragnarok:
     driver: bridge
-
-
-
-
