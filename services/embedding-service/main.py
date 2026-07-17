@@ -27,10 +27,8 @@ qdrant: Optional[QdrantClient] = None
 
 @app.on_event("startup")
 async def startup():
-    global model, qdrant
-    logger.info(f"Loading embedding model: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
-
+    global qdrant
+    logger.info("Initializing Qdrant client")
     qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
     # Create collection if not exists
@@ -42,6 +40,17 @@ async def startup():
             vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
         )
         logger.info(f"Created Qdrant collection: {COLLECTION_NAME}")
+    
+    logger.info("Embedding model will be lazy-loaded on first request")
+
+
+async def ensure_model_loaded():
+    global model
+    if model is None:
+        logger.info(f"Lazy-loading embedding model: {MODEL_NAME}")
+        model = SentenceTransformer(MODEL_NAME)
+        logger.info("Embedding model loaded successfully")
+    return model
 
 
 class EmbedRequest(BaseModel):
@@ -62,6 +71,8 @@ async def health():
 @app.post("/embed")
 async def embed_chunks(req: EmbedRequest):
     """Generate embeddings for chunks and store in Qdrant."""
+    await ensure_model_loaded()
+    
     if not req.chunks:
         return {"vectors_stored": 0}
 
@@ -99,5 +110,6 @@ async def embed_chunks(req: EmbedRequest):
 @app.post("/embed-query")
 async def embed_query(req: EmbedTextRequest):
     """Generate embedding for a single query text."""
+    await ensure_model_loaded()
     embedding = model.encode(req.text, normalize_embeddings=True).tolist()
     return {"embedding": embedding}

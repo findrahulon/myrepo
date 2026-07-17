@@ -16,7 +16,7 @@ OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1").rstr
 OPENAI_PROJECT = os.getenv("OPENAI_PROJECT")
 OPENAI_ORG = os.getenv("OPENAI_ORG")
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "gpt-4o-mini")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gpt-4o-mini")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gpt-3.5-turbo")
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
 OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "256"))
 OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.3"))
@@ -89,6 +89,7 @@ async def health():
         "status": "healthy",
         "service": "llm-service",
         "provider": "openai",
+        "model": PRIMARY_MODEL,
         "configured": bool(OPENAI_API_KEY),
     }
 
@@ -100,7 +101,7 @@ async def generate(req: GenerateRequest):
 
     if not OPENAI_API_KEY:
         return {
-            "answer": "I apologize, but OPENAI_API_KEY is not configured for llm-service.",
+            "answer": "OPENAI_API_KEY is not configured. Please set the API key in environment variables.",
             "model_used": "none",
             "error": "OPENAI_API_KEY missing",
         }
@@ -112,7 +113,7 @@ async def generate(req: GenerateRequest):
     async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT_SECONDS) as client:
         for model in models_to_try:
             try:
-                logger.info("Trying OpenAI model: %s", model)
+                logger.info(f"Trying OpenAI model: {model}")
                 response = await client.post(
                     f"{OPENAI_API_BASE}/chat/completions",
                     headers=openai_headers(),
@@ -129,17 +130,14 @@ async def generate(req: GenerateRequest):
 
                 if response.status_code != 200:
                     logger.warning(
-                        "OpenAI model %s failed with %s: %s",
-                        model,
-                        response.status_code,
-                        response.text[:300],
+                        f"OpenAI model {model} failed with {response.status_code}: {response.text[:300]}"
                     )
                     continue
 
                 data = response.json()
                 answer = extract_answer(data)
                 if not answer:
-                    logger.warning("OpenAI model %s returned empty response", model)
+                    logger.warning(f"OpenAI model {model} returned empty response")
                     continue
 
                 usage = data.get("usage", {})
@@ -150,13 +148,13 @@ async def generate(req: GenerateRequest):
                     "eval_duration": 0,
                 }
             except httpx.HTTPError as e:
-                logger.error("OpenAI request failed for model %s: %s", model, e, exc_info=True)
+                logger.error(f"OpenAI request failed for model {model}: {e}", exc_info=True)
             except ValueError as e:
-                logger.error("Failed to parse OpenAI response for model %s: %s", model, e, exc_info=True)
+                logger.error(f"Failed to parse OpenAI response for model {model}: {e}", exc_info=True)
 
     return {
         "answer": "I apologize, but I'm unable to generate an answer at this time. "
-                  "The OpenAI-backed LLM service is temporarily unavailable.",
+                  "The OpenAI LLM service is temporarily unavailable. Please check your API key and quota.",
         "model_used": "none",
-        "error": "Both primary and fallback models unavailable via OpenAI",
+        "error": "Both primary and fallback OpenAI models unavailable",
     }
